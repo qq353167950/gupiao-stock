@@ -61,14 +61,13 @@ app.include_router(analyze_router, prefix="/api", tags=["分析"])
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
     """首页"""
-    return templates.TemplateResponse("index.html", {"request": request})
+    return templates.TemplateResponse(request, "index.html")
 
 
 @app.get("/analyze", response_class=HTMLResponse)
 async def analyze_page(request: Request, task_id: str = None):
     """分析页面"""
-    return templates.TemplateResponse("analyze.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "analyze.html", {
         "task_id": task_id
     })
 
@@ -81,8 +80,7 @@ async def report_page(request: Request, task_id: str):
     if not status:
         return HTMLResponse(content="<h1>任务不存在</h1>", status_code=404)
     
-    return templates.TemplateResponse("report.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "report.html", {
         "task": status
     })
 
