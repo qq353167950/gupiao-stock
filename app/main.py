@@ -42,6 +42,8 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title=APP_NAME, version=VERSION, lifespan=lifespan)
 
 # 挂载静态文件
+# 无条件创建后挂载：static 为空目录时 git 不跟踪，克隆/解压后可能缺失，直接挂载会启动即崩
+STATIC_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 # 挂载报告目录（来自 deep-analysis）
