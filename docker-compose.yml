@@ -1,0 +1,37 @@
+# ============================================================
+# 股票智能分析平台 · Docker Compose 一键部署
+#
+# 快速开始：
+#   1. cp .env.example .env && nano .env   （填推送渠道等配置）
+#   2. docker compose up -d --build
+#   3. docker compose logs -f              （观察启动日志）
+#
+# 数据持久化：数据库/日志/报告/skill 均挂载到宿主机，
+# 容器重建不丢数据。
+# ============================================================
+services:
+  stock-analyzer:
+    build: .
+    image: stock-analyzer-web:latest
+    container_name: stock-analyzer
+    restart: unless-stopped
+    ports:
+      - "8888:8888"
+    env_file:
+      - .env
+    environment:
+      - TZ=Asia/Shanghai
+    volumes:
+      # 数据库与交易日历缓存
+      - ./data:/app/data
+      # 运行日志
+      - ./logs:/app/logs
+      # UZI-Skill（含分析报告与数据缓存，更新后的 skill 也持久化）
+      - ./skills:/app/skills
+    # 每个分析子进程约 300-500MB，按 MAX_CONCURRENT_TASKS 预留
+    mem_limit: 4g
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"

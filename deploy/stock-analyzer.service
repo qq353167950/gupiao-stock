@@ -1,0 +1,36 @@
+# 股票智能分析平台 systemd 服务单元
+# 安装：
+#   sudo cp deploy/stock-analyzer.service /etc/systemd/system/
+#   按实际部署路径修改 WorkingDirectory 与 ExecStart
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now stock-analyzer
+# 查看日志：
+#   journalctl -u stock-analyzer -f
+
+[Unit]
+Description=股票智能分析平台（FastAPI + 定时分析推送）
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# ↓↓↓ 按实际部署路径修改 ↓↓↓
+WorkingDirectory=/opt/stock-analyzer-web
+ExecStart=/opt/stock-analyzer-web/venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8888
+# ↑↑↑ 按实际部署路径修改 ↑↑↑
+
+# 崩溃自动拉起
+Restart=always
+RestartSec=10
+
+# 分析子进程较多，放宽限制
+LimitNOFILE=65535
+
+# 输出进 journald
+StandardOutput=journal
+StandardError=journal
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONIOENCODING=utf-8
+
+[Install]
+WantedBy=multi-user.target

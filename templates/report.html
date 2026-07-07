@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>分析报告 - 股票智能分析平台</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { background: #F7F4EF; }
+        .card { background: #FBF9F5; }
+        .report-frame { border: none; width: 100%; min-height: 800px; }
+    </style>
+</head>
+<body class="min-h-screen">
+    
+    <!-- 头部 -->
+    <div class="bg-white shadow-sm border-b border-[#E7E1D7]">
+        <div class="max-w-7xl mx-auto px-4 py-4">
+            <div class="flex items-center justify-between">
+                <h1 class="text-2xl font-bold text-[#1F2421]">📊 股票智能分析平台</h1>
+                <a href="/" class="text-[#5C635D] hover:text-[#1F2421]">返回首页</a>
+            </div>
+        </div>
+    </div>
+
+    <div class="max-w-7xl mx-auto px-4 py-8">
+        
+        {% if task.status != 'completed' %}
+        <!-- 未完成状态 -->
+        <div class="card rounded-2xl p-8 shadow-sm text-center">
+            <h2 class="text-xl font-bold text-[#1F2421] mb-4">报告尚未生成</h2>
+            <p class="text-[#5C635D] mb-4">
+                {% if task.status == 'running' %}
+                分析正在进行中，请稍候...
+                {% elif task.status == 'failed' %}
+                分析失败：{{ task.error_message or '未知错误' }}
+                {% else %}
+                任务状态：{{ task.status }}
+                {% endif %}
+            </p>
+            <a href="/" class="inline-block px-6 py-2 bg-[#C4612F] text-white rounded-full hover:bg-[#A94E22]">
+                返回首页
+            </a>
+        </div>
+        
+        {% else %}
+        <!-- 报告预览卡片 -->
+        <div class="card rounded-2xl p-8 shadow-sm mb-6">
+            <div class="flex justify-between items-start">
+                <div>
+                    <h2 class="text-2xl font-bold text-[#1F2421] mb-2">
+                        {{ task.name or task.ticker }} 分析报告
+                    </h2>
+                    <p class="text-[#5C635D]">{{ task.ticker }}</p>
+                </div>
+                <div class="text-right">
+                    <div class="text-3xl font-bold text-[#C4612F] mb-1">
+                        {{ task.score or 'N/A' }}<span class="text-lg">/100</span>
+                    </div>
+                    <p class="text-sm text-[#5C635D]">综合评分</p>
+                </div>
+            </div>
+            
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-6">
+                {% if task.dcf_discount %}
+                <div class="p-4 bg-white rounded-lg border border-[#E7E1D7]">
+                    <p class="text-sm text-[#5C635D] mb-1">DCF估值</p>
+                    <p class="text-2xl font-bold text-green-600">
+                        {% if task.dcf_discount > 0 %}
+                        低估 {{ (task.dcf_discount * 100)|int }}%
+                        {% else %}
+                        高估 {{ (-task.dcf_discount * 100)|int }}%
+                        {% endif %}
+                    </p>
+                </div>
+                {% endif %}
+                
+                {% if task.bullish_count and task.total_voters %}
+                <div class="p-4 bg-white rounded-lg border border-[#E7E1D7]">
+                    <p class="text-sm text-[#5C635D] mb-1">评委看多</p>
+                    <p class="text-2xl font-bold text-[#C4612F]">
+                        {{ task.bullish_count }}/{{ task.total_voters }}
+                    </p>
+                </div>
+                {% endif %}
+                
+                {% if task.expires_at %}
+                <div class="p-4 bg-white rounded-lg border border-[#E7E1D7]">
+                    <p class="text-sm text-[#5C635D] mb-1">链接有效期</p>
+                    <p class="text-sm text-[#1F2421]">
+                        至 {{ task.expires_at[:16] }}
+                    </p>
+                </div>
+                {% endif %}
+            </div>
+            
+            <div class="mt-6 flex space-x-4">
+                {% if task.report_path %}
+                <a 
+                    href="/reports/{{ task.report_path }}/full-report-standalone.html" 
+                    target="_blank"
+                    class="px-6 py-2 bg-[#C4612F] text-white rounded-full hover:bg-[#A94E22] transition-colors"
+                >
+                    在新窗口查看完整报告
+                </a>
+                <a 
+                    href="/reports/{{ task.report_path }}/full-report-standalone.html" 
+                    download
+                    class="px-6 py-2 border border-[#C4612F] text-[#C4612F] rounded-full hover:bg-[#C4612F] hover:text-white transition-colors"
+                >
+                    下载报告
+                </a>
+                {% endif %}
+            </div>
+        </div>
+        
+        <!-- 嵌入报告 -->
+        {% if task.report_path %}
+        <div class="card rounded-2xl overflow-hidden shadow-sm">
+            <iframe 
+                src="/reports/{{ task.report_path }}/full-report-standalone.html"
+                class="report-frame"
+                id="reportFrame"
+            ></iframe>
+        </div>
+        
+        <script>
+            // 自动调整 iframe 高度
+            const frame = document.getElementById('reportFrame');
+            frame.onload = function() {
+                try {
+                    const height = frame.contentWindow.document.body.scrollHeight;
+                    frame.style.height = height + 'px';
+                } catch (e) {
+                    // 跨域限制，使用默认高度
+                    frame.style.height = '1000px';
+                }
+            };
+        </script>
+        {% endif %}
+        {% endif %}
+        
+    </div>
+
+</body>
+</html>

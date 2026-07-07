@@ -1,0 +1,33 @@
+# Docker 构建排除清单（减小构建上下文，避免打入敏感/运行时文件）
+
+# 敏感配置（运行时通过 env_file 注入）
+.env
+.env.llm
+
+# 版本控制与 IDE
+.git
+.gitignore
+.idea
+.vscode
+.claude
+
+# Python 运行时产物
+__pycache__
+*.pyc
+venv
+
+# 本地运行时数据（通过 volume 挂载，不打入镜像）
+data/*.db
+data/*.sqlite*
+data/trade_calendar.json
+logs/*.log
+skills/.repo
+skills/.skill-version.json
+skills/*/scripts/reports
+skills/*/scripts/.cache
+
+# 部署产物
+cloudflared
+.deps-installed
+deploy/*.md
+tests

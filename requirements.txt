@@ -1,0 +1,23 @@
+# Web 框架与服务（版本下限确保兼容 Python 3.10-3.13）
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+jinja2>=3.1.2
+python-multipart>=0.0.9
+websockets>=12.0
+sqlalchemy>=2.0.36
+aiosqlite>=0.20.0
+pydantic>=2.7.0
+httpx>=0.27.0
+requests>=2.31.0
+apscheduler>=3.10.4
+python-dateutil>=2.8.2
+
+# Deep Analysis Skill 依赖
+akshare>=1.14.0
+yfinance>=0.2.40
+baostock>=0.8.9
+pandas>=2.0.0
+ddgs>=9.0.0
+mplfinance>=0.12.10b0
+playwright>=1.42.0
+rich>=13.0.0

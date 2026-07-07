@@ -1,0 +1,79 @@
+# 敏感配置文件
+.env
+.env.llm
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# 数据库
+*.db
+*.sqlite
+*.sqlite3
+data/*.db
+data/*.sqlite
+data/*.sqlite3
+!data/.gitkeep
+
+# 日志
+logs/*.log
+!logs/.gitkeep
+
+# 报告
+reports/*.html
+!reports/.gitkeep
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 临时文件
+.cache/
+tmp/
+temp/
+*.tmp
+
+# Skill 自动更新（持久化克隆仓库与版本记录）
+skills/.repo/
+skills/.skill-version.json
+
+# Skill 运行时产物（分析缓存与报告，运行后自动生成）
+skills/deep-analysis/scripts/.cache/
+skills/deep-analysis/scripts/reports/
+
+# Claude Code 本地工作目录（操作日志与审查报告，不进入公开仓库）
+.claude/
+
+# 容器部署运行时产物
+.deps-installed
+cloudflared
+venv/
+
+# 操作系统
+.DS_Store
+Thumbs.db
+
+# 测试输出
+test_*.log
+nohup.out
