@@ -179,14 +179,26 @@ def _refresh_repo() -> Optional[str]:
 def _sync_one_skill(src: Path, dst: Path, preserve_paths=None):
     """用 src 替换 dst，但保留 dst 中 preserve_paths 指定的运行时数据。
 
-    步骤：暂存保留目录 → 删除 dst → 复制 src → 恢复保留目录。
-    暂存目录建在 dst 同级（同文件系统，move 为原子重命名）。
+    步骤：先把 src 完整复制到 dst 同级临时目录（失败则旧目录原样保留）→
+    暂存保留目录 → 删除 dst → 原子重命名新目录为 dst → 恢复保留目录。
+    暂存与临时目录都建在 dst 同级（同文件系统，move 为原子重命名）。
+    任一环节失败时尽力把暂存数据搬回，实在搬不回则保留暂存目录并打印路径，
+    绝不静默删除运行时数据（报告与缓存）。
     """
     preserve_paths = PRESERVE_PATHS if preserve_paths is None else preserve_paths
     dst.parent.mkdir(parents=True, exist_ok=True)
 
+    # 第一步：先复制新版本到临时目录，复制失败时旧 skill 完好无损
+    incoming = Path(tempfile.mkdtemp(prefix=f".incoming-{dst.name}-", dir=dst.parent)) / dst.name
+    try:
+        shutil.copytree(src, incoming)
+    except Exception:
+        shutil.rmtree(incoming.parent, ignore_errors=True)
+        raise
+
     staging = None
     preserved: list = []
+    restored: list = []
     try:
         if dst.exists():
             # 暂存运行时数据
@@ -200,7 +212,8 @@ def _sync_one_skill(src: Path, dst: Path, preserve_paths=None):
                     preserved.append(rel)
             shutil.rmtree(dst)
 
-        shutil.copytree(src, dst)
+        # 原子重命名（同文件系统），比逐文件复制的失败窗口小得多
+        incoming.rename(dst)
 
         # 恢复运行时数据（新版本若自带同名空目录，先让位）
         for rel in preserved:
@@ -209,9 +222,30 @@ def _sync_one_skill(src: Path, dst: Path, preserve_paths=None):
                 shutil.rmtree(restore_to)
             restore_to.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(staging / rel), str(restore_to))
+            restored.append(rel)
+    except Exception:
+        # 尽力把已暂存但未恢复的数据搬回（dst 此时可能是旧目录残骸或新目录）
+        pending = [rel for rel in preserved if rel not in restored]
+        if staging and pending and dst.exists():
+            for rel in pending:
+                try:
+                    restore_to = dst / rel
+                    if not restore_to.exists():
+                        restore_to.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.move(str(staging / rel), str(restore_to))
+                        restored.append(rel)
+                except Exception:
+                    pass
+        raise
     finally:
+        shutil.rmtree(incoming.parent, ignore_errors=True)
         if staging and staging.exists():
-            shutil.rmtree(staging, ignore_errors=True)
+            leftover = [rel for rel in preserved if rel not in restored]
+            if leftover:
+                # 还有数据没搬回：绝不删除，保留暂存目录供人工恢复
+                print(f"   ⚠️  运行时数据未能全部恢复，已保留在: {staging}（含 {leftover}）")
+            else:
+                shutil.rmtree(staging, ignore_errors=True)
 
 
 def _sync_all_skills() -> int:
@@ -281,6 +315,23 @@ def install_or_update_skills(force: bool = False) -> bool:
     return True
 
 
+def _has_active_analysis() -> bool:
+    """是否有正在运行/排队的分析任务（更新 skill 会删除其工作目录，必须互斥）"""
+    try:
+        from app.database import SessionLocal, AnalysisTask
+        db = SessionLocal()
+        try:
+            n = db.query(AnalysisTask).filter(
+                AnalysisTask.status.in_(["running", "pending"])
+            ).count()
+            return n > 0
+        finally:
+            db.close()
+    except Exception:
+        # 查询失败时保守处理：视为有任务在跑，跳过更新
+        return True
+
+
 def check_and_update_skill(respect_interval: bool = True) -> bool:
     """更新检查入口（启动时与定时任务共用）。
 
@@ -297,6 +348,11 @@ def check_and_update_skill(respect_interval: bool = True) -> bool:
     if respect_interval and not should_check_now(version_data, SKILL_UPDATE_INTERVAL_DAYS):
         checked_at = version_data.get("checked_at", "")[:16]
         print(f"   ✓ 距上次检查（{checked_at}）未满 {SKILL_UPDATE_INTERVAL_DAYS} 天，跳过")
+        return False
+
+    # 互斥保护：有分析任务在跑时更新会删除其工作目录导致任务崩溃
+    if _has_active_analysis():
+        print("   ⚠️  存在运行中/排队中的分析任务，本次跳过 skill 更新")
         return False
 
     print(f"\n[Skill 更新] 检查 UZI-Skill 更新...")

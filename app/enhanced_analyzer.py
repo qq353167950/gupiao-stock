@@ -319,14 +319,19 @@ class EnhancedAnalyzer:
     def _find_report_dir(self, ticker: str, since_ts: float) -> Optional[Path]:
         """在 skill reports 目录中查找本次分析生成/更新的报告目录。
 
-        匹配策略：目录 mtime 晚于分析开始时间，且（目录名含股票代码 或 one-liner 首行含 ticker）；
+        匹配策略（严格优先，防止并发任务互相错配）：
+        1. 目录名以股票代码开头（如 002310.SZ_20260708）→ 强匹配
+        2. 目录 mtime 晚于分析开始时间，且 one-liner 首行以边界匹配含 ticker → 弱匹配
         多个匹配取最新。
         """
         if not SKILL_REPORTS_DIR.exists():
             return None
 
+        import re as _re
         ticker_code = ticker.split('.')[0] if '.' in ticker else ticker
-        candidates = []
+        # 边界匹配：避免 6 位代码作为其他数字（分数/日期/市值）的子串误命中
+        code_pattern = _re.compile(rf'(?<![0-9A-Za-z]){_re.escape(ticker_code)}(?![0-9A-Za-z])')
+        strong, weak = [], []
 
         for item in SKILL_REPORTS_DIR.iterdir():
             if not item.is_dir():
@@ -334,18 +339,19 @@ class EnhancedAnalyzer:
             # 留 60s 余量：resume 模式下报告目录可能在启动前已存在但内容被更新
             if item.stat().st_mtime < since_ts - 60:
                 continue
-            if ticker_code and ticker_code in item.name:
-                candidates.append(item)
+            if ticker_code and item.name.startswith(ticker_code):
+                strong.append(item)
                 continue
             one_liner = item / "one-liner.txt"
             if one_liner.exists():
                 try:
                     first_line = one_liner.read_text(encoding="utf-8").split("\n")[0]
-                    if ticker in first_line or ticker_code in first_line:
-                        candidates.append(item)
+                    if ticker in first_line or code_pattern.search(first_line):
+                        weak.append(item)
                 except Exception:
                     pass
 
+        candidates = strong or weak
         if not candidates:
             return None
 

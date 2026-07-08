@@ -163,14 +163,17 @@ async def morning_push_job():
         return
 
     try:
-        title, content, count = _build_today_digest()
+        loop = asyncio.get_running_loop()
+        # DB 查询与格式化为同步操作，放线程池避免阻塞事件循环
+        title, content, count = await loop.run_in_executor(None, _build_today_digest)
 
         if count > 0:
             print(f"✅ 早盘推荐共 {count} 只股票，开始推送...")
         else:
             print("⚠️  早盘推荐尚未生成（分析可能未完成），推送提醒消息")
 
-        results = notifier.send(title, content)
+        # notifier.send 为同步 requests 调用（含失败重试 sleep），必须走线程池
+        results = await loop.run_in_executor(None, notifier.send, title, content)
         if results:
             ok = sum(1 for v in results.values() if v)
             print(f"   推送结果: {ok}/{len(results)} 个渠道成功")
@@ -202,54 +205,63 @@ def _remove_old_dirs(base_dir, retention_days: int, skip_prefix: str = "_") -> i
     return removed
 
 
+def _do_cleanup_sync():
+    """同步清理逻辑（删目录/删日志/清库），供 cleanup_job 放入线程池执行"""
+    from app.database import SessionLocal, AnalysisTask, RecommendationHistory
+
+    # 1. 过期报告目录
+    removed = _remove_old_dirs(SKILL_REPORTS_DIR, REPORT_RETENTION_DAYS)
+    print(f"   报告清理: 删除 {removed} 个超过 {REPORT_RETENTION_DAYS} 天的报告目录")
+
+    # 2. skill 数据缓存
+    removed = _remove_old_dirs(SKILL_CACHE_DIR, CACHE_RETENTION_DAYS)
+    print(f"   缓存清理: 删除 {removed} 个超过 {CACHE_RETENTION_DAYS} 天的缓存目录")
+
+    # 3. 过期日志文件
+    removed = 0
+    if LOGS_DIR.exists():
+        cutoff = time.time() - LOG_RETENTION_DAYS * 86400
+        for log_file in LOGS_DIR.glob("*.log*"):
+            try:
+                if log_file.stat().st_mtime < cutoff:
+                    log_file.unlink()
+                    removed += 1
+            except Exception:
+                pass
+    print(f"   日志清理: 删除 {removed} 个超过 {LOG_RETENTION_DAYS} 天的日志文件")
+
+    # 4. 数据库历史记录（任务表 + 推荐历史表，防止无限增长拖慢查询）
+    db = SessionLocal()
+    try:
+        cutoff_dt = datetime.now() - timedelta(days=TASK_RETENTION_DAYS)
+        deleted = db.query(AnalysisTask).filter(
+            AnalysisTask.created_at < cutoff_dt
+        ).delete()
+        cutoff_date = (datetime.now() - timedelta(days=TASK_RETENTION_DAYS)).strftime("%Y-%m-%d")
+        deleted_hist = db.query(RecommendationHistory).filter(
+            RecommendationHistory.date < cutoff_date
+        ).delete()
+        db.commit()
+        print(f"   数据库清理: 删除 {deleted} 条任务记录、{deleted_hist} 条推荐历史（超过 {TASK_RETENTION_DAYS} 天）")
+    finally:
+        db.close()
+
+
 async def cleanup_job():
     """每日磁盘与数据库清理 + Skill 更新检查"""
-    from app.database import SessionLocal, AnalysisTask
-
     print(f"\n{'='*70}")
     print(f"🧹 每日清理 - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"{'='*70}\n")
 
     try:
-        # 1. 过期报告目录
-        removed = _remove_old_dirs(SKILL_REPORTS_DIR, REPORT_RETENTION_DAYS)
-        print(f"   报告清理: 删除 {removed} 个超过 {REPORT_RETENTION_DAYS} 天的报告目录")
+        loop = asyncio.get_running_loop()
+        # 磁盘删除与 DB 清理为同步重 I/O，放线程池避免阻塞事件循环
+        await loop.run_in_executor(None, _do_cleanup_sync)
 
-        # 2. skill 数据缓存
-        removed = _remove_old_dirs(SKILL_CACHE_DIR, CACHE_RETENTION_DAYS)
-        print(f"   缓存清理: 删除 {removed} 个超过 {CACHE_RETENTION_DAYS} 天的缓存目录")
-
-        # 3. 过期日志文件
-        removed = 0
-        if LOGS_DIR.exists():
-            cutoff = time.time() - LOG_RETENTION_DAYS * 86400
-            for log_file in LOGS_DIR.glob("*.log*"):
-                try:
-                    if log_file.stat().st_mtime < cutoff:
-                        log_file.unlink()
-                        removed += 1
-                except Exception:
-                    pass
-        print(f"   日志清理: 删除 {removed} 个超过 {LOG_RETENTION_DAYS} 天的日志文件")
-
-        # 4. 数据库历史任务记录
-        db = SessionLocal()
-        try:
-            cutoff_dt = datetime.now() - timedelta(days=TASK_RETENTION_DAYS)
-            deleted = db.query(AnalysisTask).filter(
-                AnalysisTask.created_at < cutoff_dt
-            ).delete()
-            db.commit()
-            print(f"   数据库清理: 删除 {deleted} 条超过 {TASK_RETENTION_DAYS} 天的任务记录")
-        finally:
-            db.close()
-
-        # 5. Skill 更新检查（skill_manager 内部按 SKILL_UPDATE_INTERVAL_DAYS 限频，
+        # Skill 更新检查（skill_manager 内部按 SKILL_UPDATE_INTERVAL_DAYS 限频，
         #    未到间隔时仅打印跳过；git 操作在线程池执行，不阻塞事件循环）
         from app.skill_manager import check_and_update_skill
-        await asyncio.get_running_loop().run_in_executor(
-            None, check_and_update_skill, True
-        )
+        await loop.run_in_executor(None, check_and_update_skill, True)
 
     except Exception as e:
         print(f"❌ 清理任务失败: {e}")

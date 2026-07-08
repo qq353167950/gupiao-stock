@@ -62,8 +62,9 @@ class AnalysisTask(Base):
             try:
                 import json
                 result["enhanced_result"] = json.loads(self.enhanced_result)
-            except:
-                pass
+            except (ValueError, TypeError) as e:
+                # 解析失败保留原始字符串缺席，但打日志便于排障
+                print(f"⚠️  enhanced_result JSON 解析失败 (task {self.task_id}): {e}")
         
         return result
     

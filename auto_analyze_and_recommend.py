@@ -142,6 +142,9 @@ def _generate_recommendations(
 
             scored = []
             for task in sub_sector_tasks:
+                # 显式排除高风险股票（trap-detector 判定），不依赖低分自然沉底
+                if task.risk_level and ("高风险" in task.risk_level):
+                    continue
                 composite_score, reason, period = calculate_composite_score(task)
                 scored.append({
                     "task": task,
@@ -240,9 +243,12 @@ async def auto_analyze_and_recommend(depth: str = "standard", recommendation_typ
     print(f"   深度: {depth} | 每板块选股: {STOCKS_PER_SECTOR}")
     print(f"{'='*70}\n")
 
-    # 1. 获取热门股票
+    # 1. 获取热门股票（同步 requests 逐批抓取耗时数十秒，放线程池避免阻塞事件循环）
     print("📊 步骤1：获取市场热门股票...")
-    sector_stocks = get_sector_hot_stocks(top_n_per_major_sector=STOCKS_PER_SECTOR)
+    loop = asyncio.get_running_loop()
+    sector_stocks = await loop.run_in_executor(
+        None, lambda: get_sector_hot_stocks(top_n_per_major_sector=STOCKS_PER_SECTOR)
+    )
 
     if not sector_stocks:
         print("⚠️  未能选出热门股票，流程终止")
@@ -335,7 +341,10 @@ async def auto_analyze_and_recommend(depth: str = "standard", recommendation_typ
             top_stocks=top_stocks,
         )
         digest = notifier.format_daily_digest(target_date, all_recs)
-        notifier.send(
+        # notifier.send 为同步 requests 调用（含失败重试 sleep），走线程池避免阻塞事件循环
+        await loop.run_in_executor(
+            None,
+            notifier.send,
             f"📊 {target_date} 分析完成（{len(all_recs)} 只推荐）",
             f"{summary}\n\n---\n\n{digest}",
         )

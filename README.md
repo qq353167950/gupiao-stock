@@ -11,6 +11,7 @@
 - **自动推荐**：每交易日收盘后自动分析，开盘前生成推荐
 - **多渠道推送**：Server酱 / PushPlus / 钉钉 / 企业微信 / Telegram / 邮件
 - **Web 界面**：实时查看分析进度和推荐结果
+- **名词解释**：`/glossary` 页面收录报告中全部专业术语的白话解释与方向说明（越大越好/越小越好）
 
 ## 系统架构
 
@@ -195,6 +196,15 @@ python -m app.skill_manager install  # 强制重装到远端最新
 - 调小 `REPORT_RETENTION_DAYS` / `CACHE_RETENTION_DAYS`
 - 清理任务每天 `CLEANUP_TIME`（默认 03:30）自动执行
 
+**报告里"分享卡/战报跳过"提示 Playwright 浏览器缺失？**
+- 分享卡与战报截图依赖 Chromium，容器内执行一次：`playwright install chromium`
+- Docker 镜像已内置（Dockerfile 中 `playwright install --with-deps chromium`）
+- 不需要分享卡功能可忽略该提示，HTML 报告不受影响
+
+**Pterodactyl 面板下容器反复重启（unhealthy）？**
+- 健康检查端口须与应用一致：应用端口优先级为 `PORT > SERVER_PORT > 8888`
+- 面板通常只注入 `SERVER_PORT`，Dockerfile 健康检查已按同一优先级探测
+
 **修改了数据库结构？**
 ```bash
 venv/bin/python -c "from app.database import Base, engine; Base.metadata.create_all(bind=engine)"
@@ -204,7 +214,7 @@ venv/bin/python -c "from app.database import Base, engine; Base.metadata.create_
 
 - **后端**：FastAPI + SQLAlchemy + APScheduler
 - **数据库**：SQLite
-- **前端**：HTML + Jinja2 模板 + WebSocket
+- **前端**：HTML + Jinja2 模板 + Alpine.js（任务进度 HTTP 轮询）
 - **分析引擎**：UZI-Skill（deep-analysis / fetch_trap_signals / fetch_lhb）
 - **数据源**：akshare / 腾讯财经 / 东方财富 / 雪球
 - **LLM**：OpenAI 兼容 API（可选）

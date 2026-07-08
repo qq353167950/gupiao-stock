@@ -23,6 +23,12 @@ _analysis_semaphore = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
 # 后台任务强引用，防止 asyncio.Task 被垃圾回收中途取消
 _background_tasks: set = set()
 
+# 分析子进程专用共享线程池：避免每个任务临时创建 executor，
+# 且 with 块退出时的 shutdown(wait=True) 在协程被取消时会同步阻塞事件循环
+_analysis_executor = concurrent.futures.ThreadPoolExecutor(
+    max_workers=MAX_CONCURRENT_TASKS, thread_name_prefix="analysis"
+)
+
 
 def parse_ticker(input_str: str) -> Optional[str]:
     """解析股票代码或名称，返回标准格式的代码"""
@@ -40,9 +46,9 @@ def parse_ticker(input_str: str) -> Optional[str]:
         else:
             return f"{input_str}.SZ"
 
-    # 美股（字母组成）
-    if re.match(r'^[A-Z]+$', input_str):
-        return input_str
+    # 美股（字母组成，统一转大写以兼容小写输入）
+    if re.match(r'^[A-Za-z]+$', input_str):
+        return input_str.upper()
 
     # 中文名称或其他格式，直接返回让 deep-analysis 处理
     return input_str
@@ -114,17 +120,16 @@ async def run_analysis(task_id: str, ticker: str, depth: str = "standard"):
 
             task_name = _get_task_field(task_id, "name") or ticker
 
-            # 在后台线程执行同步分析（避免阻塞事件循环）
+            # 在共享线程池执行同步分析（避免阻塞事件循环）
             try:
                 loop = asyncio.get_running_loop()
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                    result = await loop.run_in_executor(
-                        executor,
-                        analyzer.analyze_stock,
-                        ticker,
-                        task_name,
-                        depth,
-                    )
+                result = await loop.run_in_executor(
+                    _analysis_executor,
+                    analyzer.analyze_stock,
+                    ticker,
+                    task_name,
+                    depth,
+                )
             finally:
                 progress_task.cancel()
 
@@ -148,7 +153,8 @@ async def run_analysis(task_id: str, ticker: str, depth: str = "standard"):
                     report_dir = deep_analysis.get("report_dir")
                     summary = parse_analysis_summary(report_dir) if report_dir else None
                     if summary:
-                        fields.setdefault("score", summary.get("score"))
+                        if "score" not in fields and summary.get("score") is not None:
+                            fields["score"] = summary["score"]
                         fields["dcf_discount"] = summary.get("dcf_discount")
                         fields["bullish_count"] = summary.get("bullish_count")
                         fields["total_voters"] = summary.get("total_voters")
@@ -248,7 +254,7 @@ def create_task(ticker: str, depth: str = "standard") -> str:
         db.close()
 
     # 在当前事件循环中调度分析（信号量控制实际并发）
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     bg_task = loop.create_task(run_analysis(task_id, parsed_ticker or ticker, depth))
     # 强引用防止 GC，完成后自动移除
     _background_tasks.add(bg_task)

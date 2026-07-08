@@ -58,7 +58,20 @@ def _ensure_cloudflared() -> str:
         url = _cloudflared_download_url()
         print(f"📥 下载 cloudflared: {url}")
         import urllib.request
-        urllib.request.urlretrieve(url, binary)  # noqa: S310 — 固定官方地址
+        # 先下到临时文件再原子重命名：避免下载中断留下损坏的二进制被下次启动复用；
+        # 带超时避免网络挂起导致 Web 服务永远起不来
+        tmp = binary.with_suffix(".tmp")
+        try:
+            with urllib.request.urlopen(url, timeout=60) as resp, open(tmp, "wb") as f:  # noqa: S310 — 固定官方地址
+                while True:
+                    chunk = resp.read(1024 * 256)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+            tmp.replace(binary)
+        except Exception:
+            tmp.unlink(missing_ok=True)
+            raise
     binary.chmod(binary.stat().st_mode | stat.S_IEXEC)
     return str(binary)
 
@@ -85,7 +98,36 @@ def start_cloudflare_tunnel() -> "subprocess.Popen | None":
         return None
 
 
+def _ensure_playwright_browser():
+    """确保 Playwright Chromium 可用（分享卡/战报截图依赖）。
+
+    Pterodactyl 等无 root 面板环境首次启动时自动下载 chromium 到用户缓存目录，
+    已安装则秒级跳过。失败仅打印警告，不影响主服务（截图功能会自动跳过）。
+    """
+    try:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            # executable_path 存在即已安装，避免每次启动都跑 install
+            if Path(p.chromium.executable_path).exists():
+                return
+    except ImportError:
+        return  # 未安装 playwright 包，无需处理
+    except Exception:
+        pass  # 检测失败则尝试安装
+
+    print("📥 首次安装 Playwright Chromium（分享卡/战报截图依赖，约 1-2 分钟）...")
+    try:
+        subprocess.run(
+            [sys.executable, "-m", "playwright", "install", "chromium"],
+            check=True, timeout=600,
+        )
+        print("   ✓ Chromium 安装完成")
+    except Exception as e:
+        print(f"   ⚠️  Chromium 安装失败（不影响主服务，仅分享卡功能跳过）: {e}")
+
+
 def main():
+    _ensure_playwright_browser()
     tunnel_proc = start_cloudflare_tunnel()
 
     # 端口优先级与 app.config 一致：PORT > SERVER_PORT（Pterodactyl 注入）> 8888

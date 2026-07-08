@@ -34,6 +34,9 @@ RUN pip install -r requirements.txt \
         -i https://pypi.tuna.tsinghua.edu.cn/simple \
     || pip install -r requirements.txt
 
+# Playwright 浏览器（分享卡/战报截图与数据抓取降级路径依赖，缺失会导致相关功能跳过）
+RUN playwright install --with-deps chromium
+
 # 复制项目代码
 COPY . .
 
@@ -43,8 +46,8 @@ RUN python -c "import app.config, app.notifier, app.skill_manager; print('build 
 
 EXPOSE 8888
 
-# 健康检查：探测 /health 接口
+# 健康检查：探测 /health 接口（端口优先级与应用一致：PORT > SERVER_PORT > 8888）
 HEALTHCHECK --interval=60s --timeout=10s --start-period=120s --retries=3 \
-    CMD curl -fsS http://localhost:${PORT:-8888}/health || exit 1
+    CMD curl -fsS "http://localhost:${PORT:-${SERVER_PORT:-8888}}/health" || exit 1
 
 CMD ["python", "start.py"]

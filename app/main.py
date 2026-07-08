@@ -1,10 +1,7 @@
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from pathlib import Path
-import json
-import asyncio
 from contextlib import asynccontextmanager
 from app.config import APP_NAME, VERSION, STATIC_DIR, TEMPLATES_DIR, SKILL_REPORTS_DIR
 from app.api.analyze import router as analyze_router
@@ -64,6 +61,12 @@ async def home(request: Request):
     return templates.TemplateResponse(request, "index.html")
 
 
+@app.get("/glossary", response_class=HTMLResponse)
+async def glossary_page(request: Request):
+    """股票名词解释页面"""
+    return templates.TemplateResponse(request, "glossary.html")
+
+
 @app.get("/analyze", response_class=HTMLResponse)
 async def analyze_page(request: Request, task_id: str = None):
     """分析页面"""
@@ -83,40 +86,6 @@ async def report_page(request: Request, task_id: str):
     return templates.TemplateResponse(request, "report.html", {
         "task": status
     })
-
-
-@app.websocket("/ws/task/{task_id}")
-async def websocket_task(websocket: WebSocket, task_id: str):
-    """WebSocket 实时推送任务进度"""
-    await websocket.accept()
-    
-    try:
-        while True:
-            # 获取任务状态
-            status = get_task_status(task_id)
-            
-            if not status:
-                await websocket.send_json({
-                    "type": "error",
-                    "message": "任务不存在"
-                })
-                break
-            
-            # 发送进度
-            await websocket.send_json({
-                "type": "progress",
-                "data": status
-            })
-            
-            # 任务完成或失败，停止推送
-            if status["status"] in ["completed", "failed"]:
-                break
-            
-            # 等待5秒再次查询
-            await asyncio.sleep(5)
-            
-    except WebSocketDisconnect:
-        pass
 
 
 @app.get("/health")

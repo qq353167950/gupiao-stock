@@ -30,7 +30,7 @@ def calculate_composite_score(task: AnalysisTask) -> Tuple[float, str, str]:
                 reason_parts.append("需关注风险")
 
         # 添加基本面评价
-        if task.score:
+        if task.score is not None:
             if task.score >= 70:
                 reason_parts.append("基本面优秀")
             elif task.score >= 60:
@@ -50,7 +50,7 @@ def calculate_composite_score(task: AnalysisTask) -> Tuple[float, str, str]:
     reason_parts = []
 
     # 1. 基本面得分（权重40%）
-    if task.score:
+    if task.score is not None:
         fundamental_score = task.score * 0.4
         score += fundamental_score
 
@@ -60,7 +60,7 @@ def calculate_composite_score(task: AnalysisTask) -> Tuple[float, str, str]:
             reason_parts.append("基本面良好")
 
     # 2. 估值吸引力（权重30%）
-    if task.dcf_discount:
+    if task.dcf_discount is not None:
         # DCF低估越多，分数越高
         valuation_score = min(task.dcf_discount * 30, 30)
         score += valuation_score
@@ -81,7 +81,7 @@ def calculate_composite_score(task: AnalysisTask) -> Tuple[float, str, str]:
 
     # 4. 风险调整（权重10%）
     # 如果有杀猪盘风险或严重问题，降低评分
-    if task.score and task.score < 40:
+    if task.score is not None and task.score < 40:
         score *= 0.8  # 降低20%
         reason_parts.append("需关注风险")
     else:

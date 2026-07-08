@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>名词解释 - 股票智能分析</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        * { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; }
+        body {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+        }
+        .glass {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+        }
+        .gradient-text {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        .term-card {
+            transition: all 0.2s ease;
+            border-left: 3px solid transparent;
+        }
+        .term-card:hover {
+            border-left-color: #667eea;
+            background: rgba(102, 126, 234, 0.05);
+            transform: translateX(2px);
+        }
+    </style>
+</head>
+<body x-data="glossary()">
+
+    <!-- 顶部导航 -->
+    <nav class="glass shadow-lg">
+        <div class="max-w-7xl mx-auto px-6 py-4">
+            <div class="flex items-center justify-between">
+                <a href="/" class="flex items-center space-x-3">
+                    <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-purple-500 to-indigo-600 flex items-center justify-center">
+                        <span class="text-white text-xl font-bold">📈</span>
+                    </div>
+                    <div>
+                        <h1 class="text-xl font-bold text-gray-900">股票智能分析</h1>
+                        <p class="text-xs text-gray-500">AI驱动的投资决策平台</p>
+                    </div>
+                </a>
+                <div class="flex items-center space-x-6">
+                    <a href="/#recommendations" class="text-gray-600 hover:text-purple-600 text-sm font-medium">今日推荐</a>
+                    <a href="/#analysis" class="text-gray-600 hover:text-purple-600 text-sm font-medium">开始分析</a>
+                    <a href="/#history" class="text-gray-600 hover:text-purple-600 text-sm font-medium">历史记录</a>
+                    <a href="/glossary" class="text-purple-600 text-sm font-semibold">名词解释</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="max-w-5xl mx-auto px-6 py-12">
+
+        <!-- 头部说明 -->
+        <div class="glass rounded-3xl p-10 mb-8 text-center">
+            <h2 class="text-3xl font-bold gradient-text mb-3">📖 股票名词解释</h2>
+            <p class="text-gray-600 mb-6">看不懂报告里的术语？这里有全部指标的白话解释，以及"越大越好还是越小越好"的方向说明</p>
+
+            <!-- 搜索框 -->
+            <div class="max-w-xl mx-auto">
+                <input
+                    type="text"
+                    x-model="keyword"
+                    placeholder="搜索名词，如 PE / ROE / 看空 / 龙虎榜"
+                    class="w-full px-6 py-3 rounded-2xl border-2 border-gray-200 focus:border-purple-500 focus:outline-none shadow-sm"
+                >
+            </div>
+
+            <!-- 方向图例 -->
+            <div class="flex items-center justify-center space-x-4 mt-6 text-xs">
+                <span class="px-3 py-1 rounded-full bg-green-100 text-green-700 font-medium">↑ 越大越好</span>
+                <span class="px-3 py-1 rounded-full bg-red-100 text-red-700 font-medium">↓ 越小越好</span>
+                <span class="px-3 py-1 rounded-full bg-blue-100 text-blue-700 font-medium">◎ 适中为宜 / 分区间看</span>
+                <span class="px-3 py-1 rounded-full bg-gray-100 text-gray-600 font-medium">— 概念，无方向</span>
+            </div>
+        </div>
+
+        <!-- 分类 tabs -->
+        <div class="flex flex-wrap gap-2 mb-6 justify-center">
+            <template x-for="cat in categories" :key="cat">
+                <button
+                    @click="activeCat = cat"
+                    class="px-4 py-2 rounded-full text-sm font-medium transition-all"
+                    :class="activeCat === cat ? 'bg-white text-purple-700 shadow-md' : 'bg-white/30 text-white hover:bg-white/50'"
+                    x-text="cat"
+                ></button>
+            </template>
+        </div>
+
+        <!-- 名词卡片 -->
+        <div class="glass rounded-3xl p-8">
+            <p class="text-sm text-gray-500 mb-6">
+                共 <span class="font-semibold text-purple-600" x-text="filtered.length"></span> 条
+                <span x-show="keyword">（搜索："<span x-text="keyword"></span>"）</span>
+            </p>
+
+            <div x-show="filtered.length === 0" class="text-center py-12 text-gray-500">
+                没有找到相关名词，换个关键词试试
+            </div>
+
+            <div class="space-y-3">
+                <template x-for="t in filtered" :key="t.term">
+                    <div class="term-card bg-white rounded-xl p-5 shadow-sm">
+                        <div class="flex items-start justify-between gap-4">
+                            <div class="flex-1">
+                                <div class="flex items-center flex-wrap gap-2">
+                                    <h4 class="font-bold text-gray-900" x-text="t.term"></h4>
+                                    <span x-show="t.en" class="text-xs text-gray-400" x-text="t.en"></span>
+                                    <span class="text-xs px-2 py-0.5 rounded bg-purple-50 text-purple-600" x-text="t.cat"></span>
+                                </div>
+                                <p class="text-sm text-gray-600 mt-2 leading-relaxed" x-text="t.desc"></p>
+                                <p x-show="t.tip" class="text-xs text-gray-400 mt-2">💡 <span x-text="t.tip"></span></p>
+                            </div>
+                            <span class="shrink-0 px-3 py-1 rounded-full text-xs font-medium whitespace-nowrap"
+                                  :class="{
+                                      'bg-green-100 text-green-700': t.dir === 'up',
+                                      'bg-red-100 text-red-700': t.dir === 'down',
+                                      'bg-blue-100 text-blue-700': t.dir === 'mid',
+                                      'bg-gray-100 text-gray-600': t.dir === 'none'
+                                  }"
+                                  x-text="dirLabel(t.dir)"></span>
+                        </div>
+                    </div>
+                </template>
+            </div>
+        </div>
+
+        <p class="text-center text-white/70 text-xs mt-8">
+            以上解释仅供学习参考，不构成投资建议。指标好坏需结合行业与公司具体情况综合判断。
+        </p>
+    </div>
+
+    <script>
+        function glossary() {
+            return {
+                keyword: '',
+                activeCat: '全部',
+                categories: ['全部', '估值指标', '盈利与财务', '成长指标', '技术与趋势', '评级与观点', '交易与资金', '模型与方法'],
+                terms: [
+                    // ─── 估值指标 ───
+                    {term: '市盈率 PE', en: 'Price / Earnings', cat: '估值指标', dir: 'mid',
+                     desc: '股价 ÷ 每股收益，衡量"回本要几年"。PE 越低通常越便宜，但要和同行业比较；PE 为负说明公司在亏损，此时该指标失去参考意义。',
+                     tip: '格雷厄姆认为 PE 低于 15 才算便宜；报告中出现负 PE（如 -232）表示公司亏损。'},
+                    {term: '市净率 PB', en: 'Price / Book', cat: '估值指标', dir: 'mid',
+                     desc: '股价 ÷ 每股净资产，衡量"花几倍价钱买公司家底"。一般越低越便宜，低于 1 表示股价低于净资产；但过低也可能说明资产质量差。',
+                     tip: '格雷厄姆的经典红线：PE × PB 不超过 22.5。'},
+                    {term: 'PEG', en: 'PE / Growth', cat: '估值指标', dir: 'down',
+                     desc: '市盈率 ÷ 盈利增速，衡量"估值是否配得上成长"。小于 1 通常认为便宜，大于 2 说明估值透支了成长。',
+                     tip: '彼得·林奇的招牌指标，理想区间是 0.5-1。'},
+                    {term: 'PE 分位', en: 'PE Percentile', cat: '估值指标', dir: 'down',
+                     desc: '当前 PE 在历史（如近 5 年）中的位置。分位 20% 表示比历史上 80% 的时间都便宜；分位越低，估值越处于历史低位。'},
+                    {term: '市值 MCAP', en: 'Market Cap', cat: '估值指标', dir: 'none',
+                     desc: '股价 × 总股本，即整个公司的市场价格。大市值稳但弹性小，小市值弹性大但风险高，无绝对好坏。'},
+                    {term: 'EV/EBITDA', en: 'Enterprise Value / EBITDA', cat: '估值指标', dir: 'down',
+                     desc: '企业价值 ÷ 息税折旧摊销前利润，比 PE 更适合比较负债水平不同的公司。越低越便宜。'},
+                    {term: 'EV/Revenue', en: '企业价值/营收', cat: '估值指标', dir: 'down',
+                     desc: '企业价值 ÷ 营业收入，常用于还没盈利的成长公司。倍数越高，估值越贵，"脱离地心引力"就是指这个倍数高得离谱。'},
+                    {term: '安全边际', en: 'Margin of Safety', cat: '估值指标', dir: 'up',
+                     desc: '内在价值与市场价格之间的折扣。买得比价值便宜越多，容错空间越大。价值投资的核心概念。'},
+                    {term: '内在价值', en: 'Intrinsic Value', cat: '估值指标', dir: 'none',
+                     desc: '公司"真正值多少钱"，通常用 DCF 等模型估算。股价低于内在价值 → 低估（好事）；高于 → 高估。'},
+                    {term: '低估 / 高估', en: 'Undervalued / Overvalued', cat: '估值指标', dir: 'none',
+                     desc: '报告中"DCF 认为低估 75%"意思是：模型算出的内在价值比现价高 75%，理论上有上涨空间。低估是买入的理由，高估是回避的理由。'},
+
+                    // ─── 盈利与财务 ───
+                    {term: 'ROE 净资产收益率', en: 'Return on Equity', cat: '盈利与财务', dir: 'up',
+                     desc: '净利润 ÷ 净资产，衡量"股东的钱一年能赚多少"。巴菲特最爱的指标，长期高于 15% 是好生意的标志；为负表示在亏钱。'},
+                    {term: 'EPS 每股收益', en: 'Earnings Per Share', cat: '盈利与财务', dir: 'up',
+                     desc: '净利润 ÷ 总股本，每一股赚到的钱。增长越快越好，是欧奈尔 CANSLIM 体系的核心。'},
+                    {term: '毛利率', en: 'Gross Margin', cat: '盈利与财务', dir: 'up',
+                     desc: '（收入 - 成本）÷ 收入，衡量产品"值不值钱"。越高说明产品竞争力/定价权越强；为负说明卖一件亏一件。'},
+                    {term: '净利率', en: 'Net Margin', cat: '盈利与财务', dir: 'up',
+                     desc: '净利润 ÷ 收入，最终"到手"的比例。费雪、巴菲特都要求 15% 以上；为负即亏损。'},
+                    {term: '资产负债率', en: 'Debt Ratio', cat: '盈利与财务', dir: 'down',
+                     desc: '总负债 ÷ 总资产，衡量欠债多不多。一般低于 50% 算稳健，太高遇到行业寒冬容易爆雷；但银行地产等行业天然偏高，需分行业看。'},
+                    {term: '流动比率', en: 'Current Ratio', cat: '盈利与财务', dir: 'up',
+                     desc: '流动资产 ÷ 流动负债，衡量短期还债能力。大于 2 比较安全（格雷厄姆标准），小于 1 说明短期资金紧张。'},
+                    {term: 'FCF 自由现金流', en: 'Free Cash Flow', cat: '盈利与财务', dir: 'up',
+                     desc: '经营现金流减去必要的资本开支后，真正可以自由支配的钱。持续为正的公司才有分红、回购、扩张的底气；持续为负要靠融资输血。'},
+                    {term: 'OCF 经营现金流', en: 'Operating Cash Flow', cat: '盈利与财务', dir: 'up',
+                     desc: '主营业务实际收到的现金。报告中"OCF/净利 大幅背离"是警示信号：账面有利润但收不到钱，利润质量可疑。'},
+                    {term: '分红 / 股息', en: 'Dividend', cat: '盈利与财务', dir: 'up',
+                     desc: '公司把利润分给股东的部分。连续多年稳定分红说明公司现金流健康、对股东慷慨；股息中断往往是恶化信号。'},
+                    {term: '表外债务', en: 'Off-balance-sheet Debt', cat: '盈利与财务', dir: 'down',
+                     desc: '没有体现在资产负债表上的隐性负债（如担保、租赁）。比例越低、披露越清晰越好，高比例是做空者最爱找的把柄。'},
+                    {term: '审计无保留意见', en: 'Clean Audit Opinion', cat: '盈利与财务', dir: 'none',
+                     desc: '会计师事务所对财报的"体检合格证"。"审计 clean"= 报表可信度高；被出具保留意见/无法表示意见则是重大警报。'},
+
+                    // ─── 成长指标 ───
+                    {term: 'CAGR 年复合增长率', en: 'Compound Annual Growth Rate', cat: '成长指标', dir: 'up',
+                     desc: '几年间平均每年的复合增速。"营收 3Y CAGR -53.5%"表示过去三年营收平均每年萎缩一半，非常糟糕。'},
+                    {term: '营收增速', en: 'Revenue Growth', cat: '成长指标', dir: 'up',
+                     desc: '收入同比增长的速度。林奇偏爱 20-50% 的"快速成长股"；负增长说明生意在萎缩。'},
+                    {term: 'Rule of 40', en: '40 法则', cat: '成长指标', dir: 'up',
+                     desc: '营收增速 + 利润率 ≥ 40% 则视为优秀，是评估 SaaS/成长公司"增长与盈利平衡"的经验法则。'},
+                    {term: 'TAM 市场空间', en: 'Total Addressable Market', cat: '成长指标', dir: 'up',
+                     desc: '这门生意理论上能吃到的整个市场规模。TAM 越大，公司的天花板越高，"千亿美元级 TAM"是成长派的入场券。'},
+                    {term: '护城河', en: 'Moat', cat: '成长指标', dir: 'up',
+                     desc: '公司抵御竞争的持久优势（品牌、专利、网络效应、成本优势等）。报告中按 40 分制打分，芒格要求 28 分以上才算"宽"。'},
+                    {term: '网络效应', en: 'Network Effect', cat: '成长指标', dir: 'up',
+                     desc: '用户越多产品越好用、越好用用户越多的正循环（如微信）。最强的护城河类型之一。'},
+                    {term: 'YTD', en: 'Year To Date', cat: '成长指标', dir: 'up',
+                     desc: '今年以来的涨跌幅。"YTD -0.9%"就是今年到现在跌了 0.9%。'},
+
+                    // ─── 技术与趋势 ───
+                    {term: 'Stage 1/2/3/4 阶段', en: 'Stan Weinstein Stages', cat: '技术与趋势', dir: 'none',
+                     desc: '股价周期四阶段：Stage 1 底部盘整 → Stage 2 上升趋势（最佳买入期）→ Stage 3 顶部 → Stage 4 下跌。报告中"Stage 1 底部"表示还没走出上涨趋势。'},
+                    {term: '量能', en: 'Volume', cat: '技术与趋势', dir: 'none',
+                     desc: '成交量的强弱。上涨放量 = 资金真金白银买入（健康）；上涨缩量 = 缺乏承接（可疑）。方向要结合价格看。'},
+                    {term: '筹码', en: 'Chip Distribution', cat: '技术与趋势', dir: 'none',
+                     desc: '各价位持仓成本的分布。"筹码集中于低位 + 多头形态"利于上涨；"非多头"表示套牢盘重、上方压力大。'},
+                    {term: '52 周新高', en: '52-Week High', cat: '技术与趋势', dir: 'none',
+                     desc: '近一年最高价。欧奈尔认为强势股应接近新高买入（而非"贪便宜"抄底）；"距 60 日高点 -42%"表示远离强势区。'},
+                    {term: 'RS 强度', en: 'Relative Strength', cat: '技术与趋势', dir: 'up',
+                     desc: '个股相对大盘的强弱排名。RS 越高说明比大多数股票强，强者恒强是趋势投资核心逻辑。'},
+                    {term: '均线破位', en: 'MA Breakdown', cat: '技术与趋势', dir: 'none',
+                     desc: '股价跌破重要均线（如 50 日线），趋势派视为卖出/止损信号。'},
+                    {term: '贝塔 β', en: 'Beta', cat: '技术与趋势', dir: 'mid',
+                     desc: '个股相对大盘的波动倍数。β=1.5 表示大盘涨 1% 它涨 1.5%。高 β 弹性大风险也大，稳健型投资者偏好低 β。'},
+
+                    // ─── 评级与观点 ───
+                    {term: '看多 / Bullish', en: 'Bullish', cat: '评级与观点', dir: 'none',
+                     desc: '认为股价会涨（"牛市"的牛 = Bull）。报告中评委"看多"即给出正面评价，建议买入或持有。'},
+                    {term: '看空 / Bearish', en: 'Bearish', cat: '评级与观点', dir: 'none',
+                     desc: '认为股价会跌（"熊市"的熊 = Bear）。"8 派看空"意思是九大流派里 8 个流派的主流结论是负面的。'},
+                    {term: '中性 / Neutral', en: 'Neutral', cat: '评级与观点', dir: 'none',
+                     desc: '不看好也不看衰，选择观望。通常是"有亮点但缺陷也明显"时的结论。'},
+                    {term: '共识度 Consensus', en: 'Consensus', cat: '评级与观点', dir: 'up',
+                     desc: '评委观点的一致程度。共识度高说明结论可信度高；共识度低（如 16%）说明分歧巨大，结论不稳定。'},
+                    {term: '综合评分 Alpha Score', en: 'Alpha Score', cat: '评级与观点', dir: 'up',
+                     desc: '本系统给出的 0-100 总分，综合基本面、估值、评委投票等。分数越高越值得关注；40 分左右属"谨慎"区间。'},
+                    {term: 'conf 置信度', en: 'Confidence', cat: '评级与观点', dir: 'up',
+                     desc: '评委对自己结论的把握程度（0-100）。置信度低说明数据不足或信号矛盾，结论要打折扣。'},
+                    {term: '回避 / 观望 / 买入', en: 'Avoid / Wait / Buy', cat: '评级与观点', dir: 'none',
+                     desc: '评委的操作建议三档：回避 = 不碰；观望 = 等更好的时机或价格；买入 = 建议建仓。'},
+                    {term: '研报买入率', en: 'Analyst Buy Ratio', cat: '评级与观点', dir: 'mid',
+                     desc: '券商研报中给"买入"评级的比例。高说明机构认可，但 100% 买入率有时反而说明预期已打满，利好出尽。'},
+                    {term: '杀猪盘体检', en: 'Pump & Dump Check', cat: '评级与观点', dir: 'none',
+                     desc: '本系统的风险扫描：检测股价是否被人为拉抬、社群推票、诱多出货等操纵痕迹。🟢 安全 = 未发现明显推广痕迹。'},
+
+                    // ─── 交易与资金 ───
+                    {term: '龙虎榜', en: 'Dragon-Tiger List', cat: '交易与资金', dir: 'none',
+                     desc: '交易所每日公布的异动股票大额买卖席位榜单，是观察游资、机构动向的窗口。"近 30 天上榜 0 次"说明近期没有大资金异动。'},
+                    {term: '游资', en: 'Hot Money', cat: '交易与资金', dir: 'none',
+                     desc: '追逐短线热点的大额个人/民间资金，风格快进快出、偏好题材股和涨停板。报告中"A 股游资派"评委即模拟这类风格。'},
+                    {term: '主线 / 题材', en: 'Market Theme', cat: '交易与资金', dir: 'none',
+                     desc: '当前市场资金集中炒作的方向（如 AI、新能源）。游资只做主线："不在主线上、没有题材催化" = 短线资金不会光顾。'},
+                    {term: '涨停基因', en: 'Limit-up History', cat: '交易与资金', dir: 'none',
+                     desc: '历史上经常涨停的个股被认为"有资金关照、群众基础好"，游资更愿意接力；"无涨停基因"即缺少这种短线号召力。'},
+                    {term: '弱转强', en: 'Weak-to-Strong', cat: '交易与资金', dir: 'none',
+                     desc: '游资术语：股票从弱势（如大跌、炸板）次日直接高开走强，说明有资金抢筹，是短线买点信号。"没确认"即该信号未出现。'},
+                    {term: '盘口', en: 'Order Book', cat: '交易与资金', dir: 'none',
+                     desc: '买卖五档挂单和逐笔成交透露的资金意图。"盘口不强"指挂单和成交显示买方力量不足。'},
+                    {term: '接力', en: 'Relay Trading', cat: '交易与资金', dir: 'none',
+                     desc: '游资打法：前一波资金拉升后，下一波资金接着买入推高。"接力没有抓手"= 找不到让下一波资金进场的理由。'},
+                    {term: '仓位 Position', en: 'Position Size', cat: '交易与资金', dir: 'none',
+                     desc: '投入资金占总资金的比例。"Position 50% 起步"建议先用一半计划资金建仓，留有余地应对波动。'},
+                    {term: 'Entry / Stop / Target', en: '入场 / 止损 / 目标', cat: '交易与资金', dir: 'none',
+                     desc: '交易计划三要素：Entry 建议买入价；Stop 止损价（跌破必须卖出认错）；Target 目标价（到达可考虑止盈）。'},
+                    {term: '止损', en: 'Stop Loss', cat: '交易与资金', dir: 'none',
+                     desc: '亏到预设幅度就无条件卖出，防止小亏变大亏。欧奈尔铁律：跌破买入价 7-8% 无条件止损。'},
+                    {term: '机构持仓', en: 'Institutional Holdings', cat: '交易与资金', dir: 'mid',
+                     desc: '基金等专业机构的持股情况。机构进场是认可信号；但"机构都进来了"也可能意味着买盘耗尽、上涨空间有限。'},
+
+                    // ─── 模型与方法 ───
+                    {term: 'DCF 现金流折现', en: 'Discounted Cash Flow', cat: '模型与方法', dir: 'none',
+                     desc: '把公司未来每年能赚的现金折算成今天的价值，加总得到内在价值。最经典的估值模型，但对亏损公司（FCF 为负）会失效。',
+                     tip: '报告中"DCF 内在价值为 0/None"通常就是因为公司自由现金流为负。'},
+                    {term: 'LBO IRR', en: 'Leveraged Buyout IRR', cat: '模型与方法', dir: 'up',
+                     desc: '模拟私募基金"借钱收购这家公司"能获得的年化回报率。IRR 超过 20% 说明按当前价格收购划算，侧面印证股价便宜。'},
+                    {term: 'Comps 可比公司估值', en: 'Comparable Companies', cat: '模型与方法', dir: 'none',
+                     desc: '找同行业类似公司，用它们的平均估值倍数（PE/PB/EV 等）推算目标价。"隐含目标价缺失"= 同行样本不足没法算。'},
+                    {term: 'WACC 加权资本成本', en: 'Weighted Average Cost of Capital', cat: '模型与方法', dir: 'down',
+                     desc: 'DCF 模型中的折现率，即公司融资的综合成本。WACC 越高，未来现金流折现后越不值钱，估值越低。'},
+                    {term: 'CANSLIM', en: 'CANSLIM 七维法则', cat: '模型与方法', dir: 'none',
+                     desc: '欧奈尔的选股体系，七个字母对应七个条件：C 季度盈利增速、A 年度盈利增速、N 新高/新产品、S 供需、L 行业龙头、I 机构认可、M 大盘方向。'},
+                    {term: '22 维 Deep Scan', en: '22-Dimension Scan', cat: '模型与方法', dir: 'none',
+                     desc: '本系统对股票做的 22 个维度全面体检：基本面、估值、筹码、新闻、龙虎榜、行业地位等，每个维度独立采集数据。'},
+                    {term: '流派 School', en: 'Investment School', cat: '模型与方法', dir: 'none',
+                     desc: '本系统把 60+ 位 AI 评委按投资哲学分为九派：价值、成长、宏观、技术、中式价投、A 股游资、量化、科技领袖、AI 卡位。不同流派看同一只股票会给出完全不同的结论——分歧越大结论越不稳。'},
+                    {term: '基本面 Fundamental', en: 'Fundamentals', cat: '模型与方法', dir: 'up',
+                     desc: '公司经营的"底子"：营收、利润、负债、现金流等。基本面分越高，公司经营质量越好。'},
+                    {term: '催化剂 Catalyst', en: 'Catalyst', cat: '模型与方法', dir: 'none',
+                     desc: '可能引发股价变动的未来事件：季报披露、新品发布、股东大会、政策等。有明确催化剂的股票更容易被资金提前布局。'},
+                    {term: '翻盘条件', en: 'Thesis-breaking Condition', cat: '模型与方法', dir: 'none',
+                     desc: '评委预设的"什么情况下我承认看错"。例如巴菲特：ROE 连续 2 年跌破 12% 就卖出。给结论装上纠错机制。'},
+                    {term: '数据覆盖率', en: 'Data Coverage', cat: '模型与方法', dir: 'up',
+                     desc: '本次分析成功采集到的数据字段比例。覆盖率越高，报告结论越可靠；缺口字段会显示为"—"。'}
+                ],
+
+                get filtered() {
+                    const kw = this.keyword.trim().toLowerCase();
+                    return this.terms.filter(t => {
+                        if (this.activeCat !== '全部' && t.cat !== this.activeCat) return false;
+                        if (!kw) return true;
+                        return (t.term + (t.en || '') + t.desc + (t.tip || '')).toLowerCase().includes(kw);
+                    });
+                },
+
+                dirLabel(dir) {
+                    return {up: '↑ 越大越好', down: '↓ 越小越好', mid: '◎ 适中为宜', none: '— 概念'}[dir];
+                }
+            }
+        }
+    </script>
+</body>
+</html>

@@ -141,9 +141,20 @@ async def get_recommendation_history(limit: int = 30, db: Session = Depends(get_
     """
     from app.database import RecommendationHistory
     from app.stock_pool import get_stock_category
-    
-    # 获取历史推荐
+
+    # 先取最近 limit 天的日期，再查明细：避免历史表增长后全表加载拖慢接口
+    recent_dates = [
+        row[0] for row in db.query(RecommendationHistory.date)
+        .distinct()
+        .order_by(RecommendationHistory.date.desc())
+        .limit(limit)
+        .all()
+    ]
+    if not recent_dates:
+        return {"history": [], "count": 0}
+
     history_recs = db.query(RecommendationHistory)\
+        .filter(RecommendationHistory.date.in_(recent_dates))\
         .order_by(RecommendationHistory.date.desc(), RecommendationHistory.rank)\
         .all()
     
@@ -170,8 +181,8 @@ async def get_recommendation_history(limit: int = 30, db: Session = Depends(get_
         history_by_date[date]['sectors'][sector].append(rec_dict)
         history_by_date[date]['total'] += 1
     
-    # 转换为列表并限制数量
-    history_list = list(history_by_date.values())[:limit]
+    # 转换为列表（日期已在查询层限制为最近 limit 天）
+    history_list = list(history_by_date.values())
     
     return {
         "history": history_list,
