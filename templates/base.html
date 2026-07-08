@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}股票智能分析 - AI驱动的投资决策平台{% endblock %}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        * { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; }
+        body {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+        }
+        .glass {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+        }
+        .gradient-text {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            transition: all 0.3s ease;
+        }
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 25px rgba(102, 126, 234, 0.3);
+        }
+    </style>
+    {% block styles %}{% endblock %}
+</head>
+{# 页面级 Alpine 组件通过 body_attrs 挂载，如 x-data="recommendations()" #}
+<body {% block body_attrs %}{% endblock %}>
+
+    <!-- 顶部导航（当前页按路径自动高亮） -->
+    {% set nav_items = [
+        ("/", "开始分析"),
+        ("/recommendations", "今日推荐"),
+        ("/history", "历史记录"),
+        ("/glossary", "名词解释"),
+    ] %}
+    <nav class="glass shadow-lg">
+        <div class="max-w-7xl mx-auto px-6 py-4">
+            <div class="flex items-center justify-between">
+                <a href="/" class="flex items-center space-x-3">
+                    <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-purple-500 to-indigo-600 flex items-center justify-center">
+                        <span class="text-white text-xl font-bold">📈</span>
+                    </div>
+                    <div>
+                        <h1 class="text-xl font-bold text-gray-900">股票智能分析</h1>
+                        <p class="text-xs text-gray-500">AI驱动的投资决策平台</p>
+                    </div>
+                </a>
+                <div class="flex items-center space-x-6">
+                    {% for path, label in nav_items %}
+                    <a href="{{ path }}"
+                       class="{% if request.url.path == path %}text-purple-600 text-sm font-semibold{% else %}text-gray-600 hover:text-purple-600 text-sm font-medium{% endif %}">{{ label }}</a>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    {% block content %}{% endblock %}
+
+    <script>
+        /**
+         * 发起分析任务并跳转进度页（开始分析页与今日推荐页共用）。
+         * 失败时抛出异常，由调用方展示错误提示。
+         */
+        async function postAnalyze(ticker, depth) {
+            const response = await fetch('/api/analyze', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ticker, depth })
+            });
+            if (!response.ok) {
+                throw new Error('分析请求失败');
+            }
+            const data = await response.json();
+            window.location.href = '/analyze?task_id=' + data.task_id;
+        }
+
+        /** 时间戳格式化为本地日期时间（历史记录等列表共用） */
+        function formatDate(dateStr) {
+            if (!dateStr) return '';
+            return new Date(dateStr).toLocaleString('zh-CN', {
+                year: 'numeric', month: '2-digit', day: '2-digit',
+                hour: '2-digit', minute: '2-digit'
+            });
+        }
+    </script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

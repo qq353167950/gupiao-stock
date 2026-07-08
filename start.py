@@ -34,6 +34,14 @@ if hasattr(time, "tzset"):  # 仅 Unix；Windows 本地调试跳过
 
 os.environ.setdefault("PYTHONIOENCODING", "utf-8")
 
+# 当前进程的 stdout/stderr 立即切 UTF-8（上面的环境变量只影响子进程）：
+# Windows GBK 控制台下打印 emoji/特殊符号会直接 UnicodeEncodeError 崩溃
+for stream in (sys.stdout, sys.stderr):
+    try:
+        stream.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
 
 def _cloudflared_download_url() -> str:
     """按 CPU 架构选择 cloudflared 二进制下载地址（支持 GITHUB_PROXY 镜像前缀）"""

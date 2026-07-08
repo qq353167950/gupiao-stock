@@ -24,8 +24,10 @@ wheels/
 .installed.cfg
 *.egg
 
-# 数据库
+# 数据库（含 SQLite WAL 模式运行时文件）
 *.db
+*.db-shm
+*.db-wal
 *.sqlite
 *.sqlite3
 data/*.db

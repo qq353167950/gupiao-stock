@@ -372,6 +372,63 @@ def test_skill_manager_version_roundtrip():
             sm.VERSION_FILE.unlink()
 
 
+# ─── 页面路由与模板 ───
+
+def test_page_routes_registered():
+    """四个功能页 + favicon 路由必须全部注册"""
+    from app.main import app
+    paths = {getattr(r, "path", None) for r in app.routes}
+    for expected in ("/", "/recommendations", "/history", "/glossary",
+                     "/analyze", "/report/{task_id}", "/favicon.ico", "/health"):
+        assert expected in paths, f"缺少路由 {expected}"
+
+
+def test_templates_render():
+    """全部页面模板可渲染（捕获 Jinja2 语法错误与继承断链）"""
+    from app.main import templates
+
+    # 构造最小 Request（TemplateResponse 需要 request 对象取 url.path）
+    from starlette.requests import Request
+    def make_request(path):
+        return Request({
+            "type": "http", "method": "GET", "path": path, "raw_path": path.encode(),
+            "query_string": b"", "headers": [], "scheme": "http",
+            "server": ("test", 80), "client": ("test", 0), "root_path": "",
+        })
+
+    for name, path in [
+        ("index.html", "/"),
+        ("recommendations.html", "/recommendations"),
+        ("history.html", "/history"),
+        ("glossary.html", "/glossary"),
+    ]:
+        resp = templates.TemplateResponse(make_request(path), name)
+        body = resp.body.decode("utf-8")
+        assert len(body) > 500, f"{name} 渲染结果异常"
+        assert "</html>" in body, f"{name} HTML 不完整"
+        # 每页导航都应包含四个功能入口
+        for label in ("开始分析", "今日推荐", "历史记录", "名词解释"):
+            assert label in body, f"{name} 导航缺少 {label}"
+
+
+def test_home_page_is_analysis():
+    """首页默认展示开始分析功能（含搜索框与深度选择）"""
+    from app.main import templates
+    from starlette.requests import Request
+    req = Request({
+        "type": "http", "method": "GET", "path": "/", "raw_path": b"/",
+        "query_string": b"", "headers": [], "scheme": "http",
+        "server": ("test", 80), "client": ("test", 0), "root_path": "",
+    })
+    body = templates.TemplateResponse(req, "index.html").body.decode("utf-8")
+    assert "startAnalysis" in body  # 分析发起逻辑
+    assert "输入股票代码或名称" in body  # 搜索框
+    assert 'value="deep"' in body  # 深度选择
+    # 推荐/历史功能已拆出，首页不再内嵌其数据加载
+    assert "loadRecommendations" not in body
+    assert "loadHistory" not in body
+
+
 # ─── 优化项验证 ───
 
 def test_sqlite_wal_enabled():

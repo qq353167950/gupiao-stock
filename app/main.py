@@ -81,8 +81,20 @@ async def favicon():
 
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
-    """首页"""
+    """首页（默认展示开始分析）"""
     return templates.TemplateResponse(request, "index.html")
+
+
+@app.get("/recommendations", response_class=HTMLResponse)
+async def recommendations_page(request: Request):
+    """今日推荐页面"""
+    return templates.TemplateResponse(request, "recommendations.html")
+
+
+@app.get("/history", response_class=HTMLResponse)
+async def history_page(request: Request):
+    """历史记录页面"""
+    return templates.TemplateResponse(request, "history.html")
 
 
 @app.get("/glossary", response_class=HTMLResponse)

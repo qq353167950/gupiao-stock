@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+
+{% block title %}历史记录 - 股票智能分析{% endblock %}
+
+{% block body_attrs %}x-data="historyPage()"{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto px-6 py-12">
+
+    <div class="glass rounded-3xl p-8">
+        <div class="flex items-center justify-between mb-6">
+            <div>
+                <h2 class="text-2xl font-bold text-gray-900 mb-2">历史记录</h2>
+                <p class="text-gray-500">已完成的分析任务 · 点击查看报告</p>
+            </div>
+            <div class="px-4 py-2 bg-purple-50 rounded-full">
+                <span class="text-purple-600 font-semibold" x-text="history.length + ' 条'"></span>
+            </div>
+        </div>
+
+        <!-- 加载中 -->
+        <div x-show="!loaded" class="text-center py-12">
+            <p class="text-gray-400">加载中...</p>
+        </div>
+
+        <!-- 空态 -->
+        <div x-show="loaded && history.length === 0" class="text-center py-12" x-cloak>
+            <div class="w-20 h-20 mx-auto mb-4 rounded-full bg-gray-100 flex items-center justify-center">
+                <span class="text-4xl">🗂️</span>
+            </div>
+            <p class="text-gray-500">暂无历史记录</p>
+            <p class="text-sm text-gray-400 mt-2">
+                去<a href="/" class="text-purple-600 hover:underline">开始分析</a>第一只股票吧
+            </p>
+        </div>
+
+        <div class="space-y-3" x-show="history.length > 0">
+            <template x-for="record in history" :key="record.task_id">
+                <a :href="'/analyze?task_id=' + record.task_id"
+                   class="block p-4 bg-white rounded-xl hover:shadow-md transition-all">
+                    <div class="flex items-center justify-between">
+                        <div class="flex items-center space-x-4">
+                            <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-purple-100 to-indigo-100 flex items-center justify-center">
+                                <span class="text-xl">📈</span>
+                            </div>
+                            <div>
+                                <div class="flex items-center space-x-2">
+                                    <h4 class="font-semibold text-gray-900" x-text="record.name || record.ticker"></h4>
+                                    <span class="text-xs text-gray-400" x-text="record.ticker"></span>
+                                </div>
+                                <p class="text-sm text-gray-500" x-text="formatDate(record.created_at)"></p>
+                            </div>
+                        </div>
+                        <div class="flex items-center space-x-3">
+                            <span x-show="record.composite_score" class="text-lg font-bold gradient-text"
+                                  x-text="record.composite_score ? record.composite_score.toFixed(0) + ' 分' : ''"></span>
+                            <span class="px-3 py-1 rounded-full text-xs font-medium"
+                                  :class="{
+                                      'bg-green-100 text-green-700': record.status === 'completed',
+                                      'bg-yellow-100 text-yellow-700': record.status === 'running',
+                                      'bg-gray-100 text-gray-700': record.status === 'pending',
+                                      'bg-red-100 text-red-700': record.status === 'failed'
+                                  }"
+                                  x-text="record.status === 'completed' ? '已完成' : record.status === 'running' ? '进行中' : record.status === 'pending' ? '排队中' : '失败'">
+                            </span>
+                            <svg class="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+                            </svg>
+                        </div>
+                    </div>
+                </a>
+            </template>
+        </div>
+    </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    function historyPage() {
+        return {
+            history: [],
+            loaded: false,
+
+            async loadHistory() {
+                try {
+                    // 独立页展示空间充裕，取 50 条（原首页嵌入块仅 10 条）
+                    const response = await fetch('/api/history?limit=50');
+                    const data = await response.json();
+                    this.history = data.records || [];
+                } catch (err) {
+                    console.error('加载历史记录失败:', err);
+                } finally {
+                    this.loaded = true;
+                }
+            },
+
+            init() {
+                this.loadHistory();
+            }
+        }
+    }
+</script>
+{% endblock %}
