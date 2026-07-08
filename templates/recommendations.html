@@ -31,12 +31,23 @@
         <div class="flex items-center justify-between mb-8">
             <div>
                 <h2 class="text-2xl font-bold text-gray-900 mb-2">今日推荐</h2>
-                <p class="text-gray-500">A股24个细分板块 · 深度分析精选 · 点击股票立即发起深度分析</p>
+                <p class="text-gray-500">
+                    A股24个细分板块 · 深度分析精选
+                    {% if request.state.user %} · 点击股票立即发起深度分析{% endif %}
+                </p>
             </div>
             <div class="px-4 py-2 bg-purple-50 rounded-full">
                 <span class="text-purple-600 font-semibold" x-text="Object.keys(sectors).length + ' 个板块'"></span>
             </div>
         </div>
+
+        {% if not request.state.user %}
+        <!-- 游客提示：推荐列表可浏览，发起分析/查看报告需登录 -->
+        <div class="mb-6 p-4 bg-purple-50 border border-purple-100 rounded-xl flex items-center justify-between">
+            <p class="text-sm text-purple-700">🔒 游客可浏览推荐列表；点击股票发起分析、查看详情报告需要登录</p>
+            <a href="/login?next=/recommendations" class="text-sm font-medium text-purple-600 hover:text-purple-800 whitespace-nowrap ml-4">前往登录 →</a>
+        </div>
+        {% endif %}
 
         <!-- 加载中 -->
         <div x-show="!loaded" class="text-center py-16">

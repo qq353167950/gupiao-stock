@@ -28,6 +28,8 @@ class AnalysisTask(Base):
     enhanced_result = Column(Text)  # JSON格式的完整增强分析结果
     composite_score = Column(Float)  # 综合评分（0-100）
     risk_level = Column(String(50))  # 风险等级
+    # 任务归属：手动分析记录发起者 id；定时批量分析为 NULL（系统任务，仅管理员可见）
+    owner_user_id = Column(Integer, index=True)
     created_at = Column(DateTime, default=now_cn, index=True)  # 清理任务按时间删除（北京时间）
     started_at = Column(DateTime)
     completed_at = Column(DateTime)
@@ -54,7 +56,9 @@ class AnalysisTask(Base):
             "error_message": self.error_message,
             # 增强分析结果
             "composite_score": self.composite_score,
-            "risk_level": self.risk_level
+            "risk_level": self.risk_level,
+            # 任务归属（历史记录过滤与越权校验用；NULL=系统定时任务）
+            "owner_user_id": self.owner_user_id,
         }
         
         # 解析增强分析结果
@@ -136,6 +140,25 @@ class RecommendationHistory(Base):
         }
 
 
+class User(Base):
+    """用户表——账号仅能由管理员创建，未登录用户只读浏览"""
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    username = Column(String(50), unique=True, nullable=False, index=True)
+    password_hash = Column(String(200), nullable=False)  # pbkdf2:iterations:salt:hash
+    is_admin = Column(Boolean, default=False)  # 管理员可创建/删除账号
+    created_at = Column(DateTime, default=now_cn)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "username": self.username,
+            "is_admin": self.is_admin,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
 # 创建数据库引擎
 # check_same_thread=False：分析在线程池执行；timeout=30：写锁等待上限
 engine = create_engine(
@@ -163,6 +186,29 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 # 创建所有表
 Base.metadata.create_all(bind=engine)
+
+
+def _migrate_add_missing_columns():
+    """轻量迁移：为已存在的表补充新增列（create_all 只建新表不改旧表）。
+
+    SQLite ALTER TABLE ADD COLUMN 为秒级元数据操作，幂等执行。
+    """
+    from sqlalchemy import text
+    migrations = [
+        # (表, 列, 建列语句)：账号体系引入的任务归属列
+        ("analysis_tasks", "owner_user_id",
+         "ALTER TABLE analysis_tasks ADD COLUMN owner_user_id INTEGER"),
+    ]
+    with engine.connect() as conn:
+        for table, column, ddl in migrations:
+            cols = {row[1] for row in conn.execute(text(f"PRAGMA table_info({table})"))}
+            if cols and column not in cols:
+                conn.execute(text(ddl))
+                conn.commit()
+                print(f"🔧 数据库迁移: {table} 表已补充 {column} 列")
+
+
+_migrate_add_missing_columns()
 
 
 def recover_zombie_tasks() -> int:

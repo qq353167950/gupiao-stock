@@ -151,6 +151,24 @@ venv/bin/python auto_analyze_and_recommend.py quick morning
 | `GITHUB_PROXY` | 空 | GitHub 镜像代理（大陆网络配 `https://gh-proxy.com/`）|
 | `CF_TUNNEL_TOKEN` | 空 | Cloudflare Tunnel token（自定义域名用）|
 | `REPORT_RETENTION_DAYS` | 7 | 报告保留天数 |
+| `ADMIN_USERNAME` | admin | 内置管理员用户名 |
+| `ADMIN_PASSWORD` | admin123 | 内置管理员初始密码（**部署后必改**）|
+| `SESSION_MAX_AGE` | 604800 | 登录会话有效期（秒，默认 7 天）|
+
+## 账号与访问控制
+
+防止陌生人滥用分析资源，站点采用**邀请制**（不开放自助注册）：
+
+| 身份 | 权限 |
+|---|---|
+| 游客（未登录） | 仅浏览：首页、今日推荐列表、名词解释；不能发起分析、看历史记录、打开详情报告 |
+| 普通用户 | 可发起分析；历史记录**仅自己发起的任务**；可修改自己密码 |
+| 管理员 | 全部权限 + 查看所有人的历史 + 「用户管理」页创建/删除账号 |
+
+- **内置管理员**：首次启动自动创建（`ADMIN_USERNAME`/`ADMIN_PASSWORD` 环境变量可覆盖，默认 `admin`/`admin123`）。⚠️ 公网部署后请立即登录修改密码
+- **开设账号**：管理员登录 → 导航「用户管理」→ 填用户名与初始密码创建，可勾选授予管理员
+- **前端拦截**：游客点击功能按钮直接提示登录（不发请求）；后端 API 同样校验（401/403），双层防护
+- **定时批量分析**产生的任务归属系统，仅管理员在历史记录中可见
 
 ## UZI-Skill 自动更新
 
@@ -171,14 +189,19 @@ python -m app.skill_manager install  # 强制重装到远端最新
 
 ## API 接口
 
-| 接口 | 说明 |
-|---|---|
-| `POST /api/analyze` | 发起分析 `{"ticker": "600519", "depth": "standard"}` |
-| `GET /api/task/{task_id}` | 查询任务状态 |
-| `GET /api/recommendations/today` | 今日推荐（分板块）|
-| `GET /api/recommendations/history` | 历史推荐 |
-| `GET /api/history` | 分析历史 |
-| `GET /health` | 健康检查 |
+| 接口 | 说明 | 权限 |
+|---|---|---|
+| `POST /api/auth/login` | 登录 `{"username": "...", "password": "..."}` | 公开 |
+| `POST /api/auth/logout` | 退出登录 | 公开 |
+| `GET /api/auth/me` | 当前登录状态 | 公开 |
+| `POST /api/auth/password` | 修改自己的密码 | 登录 |
+| `GET/POST /api/auth/users`、`DELETE /api/auth/users/{id}` | 用户管理 | 管理员 |
+| `POST /api/analyze` | 发起分析 `{"ticker": "600519", "depth": "standard"}` | 登录 |
+| `GET /api/task/{task_id}` | 查询任务状态 | 登录（仅自己的任务）|
+| `GET /api/history` | 分析历史 | 登录（管理员可见全部）|
+| `GET /api/recommendations/today` | 今日推荐（分板块）| 公开 |
+| `GET /api/recommendations/history` | 历史推荐 | 公开 |
+| `GET /health` | 健康检查 | 公开 |
 
 ## 常见问题
 

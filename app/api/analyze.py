@@ -2,7 +2,8 @@ from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Optional, List
 from sqlalchemy.orm import Session
-from app.database import get_db, AnalysisTask, DailyRecommendation
+from app.auth import require_user
+from app.database import get_db, AnalysisTask, DailyRecommendation, User
 from app.task_manager import create_task, get_task_status
 from app.config import ANALYSIS_DEPTHS, now_cn
 
@@ -21,8 +22,8 @@ class AnalyzeResponse(BaseModel):
 
 
 @router.post("/analyze", response_model=AnalyzeResponse)
-async def start_analysis(request: AnalyzeRequest):
-    """开始分析股票
+async def start_analysis(request: AnalyzeRequest, user: User = Depends(require_user)):
+    """开始分析股票（需登录——游客只读，防止分析资源被滥用）
 
     统一走 create_task：与批量分析共享并发信号量，
     手动请求同样受 MAX_CONCURRENT_TASKS 限流（超出并发的任务显示"排队中"）。
@@ -34,7 +35,7 @@ async def start_analysis(request: AnalyzeRequest):
     if request.depth not in ANALYSIS_DEPTHS:
         raise HTTPException(status_code=400, detail="无效的分析深度")
 
-    task_id = create_task(ticker, depth=request.depth)
+    task_id = create_task(ticker, depth=request.depth, owner_user_id=user.id)
 
     return {
         "task_id": task_id,
@@ -43,26 +44,38 @@ async def start_analysis(request: AnalyzeRequest):
     }
 
 
+def _can_view_task(task_dict: dict, user: User) -> bool:
+    """任务可见性：管理员看全部；普通用户仅看自己发起的。
+
+    owner 为空的任务（定时批量分析/历史遗留）视为系统任务，仅管理员可见。
+    """
+    if user.is_admin:
+        return True
+    return task_dict.get("owner_user_id") == user.id
+
+
 @router.get("/task/{task_id}")
-async def get_task(task_id: str):
-    """获取任务状态"""
+async def get_task(task_id: str, user: User = Depends(require_user)):
+    """获取任务状态（需登录；普通用户仅可查看自己的任务）"""
     status = get_task_status(task_id)
-    
+
     if not status:
         raise HTTPException(status_code=404, detail="任务不存在")
-    
+    if not _can_view_task(status, user):
+        raise HTTPException(status_code=403, detail="无权查看该任务")
+
     return status
 
 
 @router.get("/history")
-async def get_history(limit: int = 10, db: Session = Depends(get_db)):
-    """获取历史记录"""
-    tasks = db.query(AnalysisTask)\
-        .filter(AnalysisTask.status == "completed")\
-        .order_by(AnalysisTask.completed_at.desc())\
-        .limit(limit)\
-        .all()
-    
+async def get_history(limit: int = 10, db: Session = Depends(get_db),
+                      user: User = Depends(require_user)):
+    """获取历史记录（需登录；普通用户仅自己的记录，管理员可见全部）"""
+    query = db.query(AnalysisTask).filter(AnalysisTask.status == "completed")
+    if not user.is_admin:
+        query = query.filter(AnalysisTask.owner_user_id == user.id)
+    tasks = query.order_by(AnalysisTask.completed_at.desc()).limit(limit).all()
+
     return {
         "records": [task.to_dict() for task in tasks]
     }

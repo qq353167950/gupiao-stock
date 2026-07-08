@@ -217,6 +217,40 @@ LLM_API_KEY = os.getenv("LLM_API_KEY", "")
 LLM_MODEL = os.getenv("LLM_MODEL", "")
 LLM_TIMEOUT = _env_int("LLM_TIMEOUT", 120)
 
+# ─── 账号体系配置 ───
+# 内置管理员：启动时自动创建（仅当用户名不存在时），用于登录后开设其他账号。
+# ⚠️ 部署后请立即用 ADMIN_PASSWORD 环境变量覆盖默认密码，或登录后在界面修改。
+ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin").strip() or "admin"
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
+
+# 会话有效期（秒），默认 7 天
+SESSION_MAX_AGE = _env_int("SESSION_MAX_AGE", 7 * 86400)
+
+
+def load_session_secret() -> str:
+    """会话签名密钥：环境变量优先，否则持久化到 data/.session_secret。
+
+    自动生成并落盘（而非每次启动随机）保证服务重启后已登录会话不失效。
+    """
+    secret = os.getenv("SESSION_SECRET", "").strip()
+    if secret:
+        return secret
+    secret_file = DATA_DIR / ".session_secret"
+    try:
+        if secret_file.exists():
+            saved = secret_file.read_text(encoding="utf-8").strip()
+            if saved:
+                return saved
+        import secrets as _secrets
+        secret = _secrets.token_hex(32)
+        secret_file.write_text(secret, encoding="utf-8")
+        return secret
+    except Exception as e:
+        # 落盘失败（只读文件系统等）退化为进程内随机：功能可用，重启需重新登录
+        print(f"⚠️  会话密钥持久化失败（重启后需重新登录）: {e}")
+        import secrets as _secrets
+        return _secrets.token_hex(32)
+
 # 确保目录存在
 for dir_path in [REPORTS_DIR, DATA_DIR, LOGS_DIR]:
     dir_path.mkdir(parents=True, exist_ok=True)

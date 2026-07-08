@@ -231,8 +231,12 @@ def parse_analysis_summary(report_dir: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def create_task(ticker: str, depth: str = "standard") -> str:
+def create_task(ticker: str, depth: str = "standard", owner_user_id: int = None) -> str:
     """创建分析任务并调度执行。
+
+    Args:
+        owner_user_id: 发起者用户 id。手动分析必填（历史记录按归属过滤）；
+            定时批量分析留空（系统任务，仅管理员可见）。
 
     必须在运行中的事件循环内调用（FastAPI 处理器 / asyncio.run 上下文）。
     """
@@ -245,7 +249,8 @@ def create_task(ticker: str, depth: str = "standard") -> str:
             task_id=task_id,
             ticker=parsed_ticker or ticker,
             depth=depth,
-            status="pending"
+            status="pending",
+            owner_user_id=owner_user_id,
         )
         db.add(task)
         db.commit()

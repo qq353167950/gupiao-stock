@@ -12,6 +12,14 @@
         <h2 class="text-4xl font-bold gradient-text mb-4">智能分析，精准决策</h2>
         <p class="text-gray-600 text-lg mb-8">基于22维数据深度分析，50位AI评委投票，DCF/LBO双重估值</p>
 
+        {% if not request.state.user %}
+        <!-- 游客提示：发起分析需登录（前端拦截，不发无谓请求） -->
+        <div class="max-w-2xl mx-auto mb-6 p-4 bg-purple-50 border border-purple-100 rounded-xl flex items-center justify-between">
+            <p class="text-sm text-purple-700">🔒 游客可浏览页面；发起分析需要登录账号</p>
+            <a href="/login?next=/" class="text-sm font-medium text-purple-600 hover:text-purple-800 whitespace-nowrap ml-4">前往登录 →</a>
+        </div>
+        {% endif %}
+
         <!-- 搜索框 -->
         <div class="max-w-2xl mx-auto">
             <div class="relative">

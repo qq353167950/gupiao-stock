@@ -375,34 +375,43 @@ def test_skill_manager_version_roundtrip():
 # ─── 页面路由与模板 ───
 
 def test_page_routes_registered():
-    """四个功能页 + favicon 路由必须全部注册"""
+    """功能页 + 登录/用户管理 + favicon 路由必须全部注册"""
     from app.main import app
     paths = {getattr(r, "path", None) for r in app.routes}
     for expected in ("/", "/recommendations", "/history", "/glossary",
-                     "/analyze", "/report/{task_id}", "/favicon.ico", "/health"):
+                     "/analyze", "/report/{task_id}", "/favicon.ico", "/health",
+                     "/login", "/admin/users"):
         assert expected in paths, f"缺少路由 {expected}"
 
 
-def test_templates_render():
-    """全部页面模板可渲染（捕获 Jinja2 语法错误与继承断链）"""
-    from app.main import templates
+def _make_request(path, user=None):
+    """构造最小 Request（TemplateResponse 需要 request.url.path 与 request.state.user）。
 
-    # 构造最小 Request（TemplateResponse 需要 request 对象取 url.path）
+    starlette 的 request.state 由 scope["state"] 字典驱动，
+    直接在 scope 注入 user 即等效于真实请求中中间件的注入动作。
+    """
     from starlette.requests import Request
-    def make_request(path):
-        return Request({
-            "type": "http", "method": "GET", "path": path, "raw_path": path.encode(),
-            "query_string": b"", "headers": [], "scheme": "http",
-            "server": ("test", 80), "client": ("test", 0), "root_path": "",
-        })
+    return Request({
+        "type": "http", "method": "GET", "path": path, "raw_path": path.encode(),
+        "query_string": b"", "headers": [], "scheme": "http",
+        "server": ("test", 80), "client": ("test", 0), "root_path": "",
+        "state": {"user": user},
+    })
+
+
+def test_templates_render():
+    """全部页面模板可渲染（捕获 Jinja2 语法错误与继承断链）——游客视角"""
+    from app.main import templates
 
     for name, path in [
         ("index.html", "/"),
         ("recommendations.html", "/recommendations"),
         ("history.html", "/history"),
         ("glossary.html", "/glossary"),
+        ("login.html", "/login"),
+        ("admin_users.html", "/admin/users"),
     ]:
-        resp = templates.TemplateResponse(make_request(path), name)
+        resp = templates.TemplateResponse(_make_request(path), name)
         body = resp.body.decode("utf-8")
         assert len(body) > 500, f"{name} 渲染结果异常"
         assert "</html>" in body, f"{name} HTML 不完整"
@@ -414,19 +423,122 @@ def test_templates_render():
 def test_home_page_is_analysis():
     """首页默认展示开始分析功能（含搜索框与深度选择）"""
     from app.main import templates
-    from starlette.requests import Request
-    req = Request({
-        "type": "http", "method": "GET", "path": "/", "raw_path": b"/",
-        "query_string": b"", "headers": [], "scheme": "http",
-        "server": ("test", 80), "client": ("test", 0), "root_path": "",
-    })
-    body = templates.TemplateResponse(req, "index.html").body.decode("utf-8")
+    body = templates.TemplateResponse(_make_request("/"), "index.html").body.decode("utf-8")
     assert "startAnalysis" in body  # 分析发起逻辑
     assert "输入股票代码或名称" in body  # 搜索框
     assert 'value="deep"' in body  # 深度选择
     # 推荐/历史功能已拆出，首页不再内嵌其数据加载
     assert "loadRecommendations" not in body
     assert "loadHistory" not in body
+
+
+# ─── 账号体系 ───
+
+def test_password_hash_roundtrip():
+    """密码哈希往返：正确密码通过、错误密码拒绝、损坏存储不抛异常"""
+    from app.auth import hash_password, verify_password
+    stored = hash_password("s3cret-密码")
+    assert stored.startswith("pbkdf2:")
+    assert verify_password("s3cret-密码", stored) is True
+    assert verify_password("wrong", stored) is False
+    # 两次哈希盐不同 → 密文不同
+    assert hash_password("s3cret-密码") != stored
+    # 损坏/异构存储格式一律拒绝而非抛异常
+    assert verify_password("x", "not-a-hash") is False
+    assert verify_password("x", "") is False
+    assert verify_password("x", "md5:1:ab:cd") is False
+
+
+def test_ensure_admin_user_idempotent():
+    """内置管理员创建幂等：重复调用不重复建号，且不覆盖已改密码"""
+    from app.auth import ensure_admin_user, verify_password, hash_password
+    from app.config import ADMIN_USERNAME
+    from app.database import SessionLocal, User
+
+    ensure_admin_user()
+    ensure_admin_user()  # 第二次调用应为 no-op
+
+    db = SessionLocal()
+    try:
+        admins = db.query(User).filter(User.username == ADMIN_USERNAME).all()
+        assert len(admins) == 1, "内置管理员重复创建"
+        assert admins[0].is_admin is True
+        original_hash = admins[0].password_hash  # 留存现场，测试后还原
+
+        # 模拟界面改密后重启：ensure_admin_user 不得覆盖
+        admins[0].password_hash = hash_password("changed-by-ui")
+        db.commit()
+    finally:
+        db.close()
+
+    try:
+        ensure_admin_user()
+        db = SessionLocal()
+        try:
+            admin = db.query(User).filter(User.username == ADMIN_USERNAME).first()
+            assert verify_password("changed-by-ui", admin.password_hash), \
+                "重启后管理员密码被环境变量默认值覆盖"
+        finally:
+            db.close()
+    finally:
+        # 还原现场：测试跑在真实开发库上，绝不能留下改过的密码
+        db = SessionLocal()
+        try:
+            admin = db.query(User).filter(User.username == ADMIN_USERNAME).first()
+            admin.password_hash = original_hash
+            db.commit()
+        finally:
+            db.close()
+
+
+def test_require_user_and_admin_dependencies():
+    """权限依赖：未登录 401；登录非管理员过 require_user 但被 require_admin 拒 403"""
+    from fastapi import HTTPException
+    from app.auth import require_user, require_admin
+    from app.database import User
+
+    class FakeRequest:
+        class state:
+            user = None
+
+    # 未登录 → 401
+    try:
+        require_user(FakeRequest())
+        assert False, "未登录应抛 401"
+    except HTTPException as e:
+        assert e.status_code == 401
+
+    # 普通用户 → require_user 通过，require_admin 403
+    normal = User(id=99, username="u", password_hash="x", is_admin=False)
+    FakeRequest.state.user = normal
+    assert require_user(FakeRequest()) is normal
+    try:
+        require_admin(normal)
+        assert False, "非管理员应抛 403"
+    except HTTPException as e:
+        assert e.status_code == 403
+
+    # 管理员 → 全部通过
+    admin = User(id=98, username="a", password_hash="x", is_admin=True)
+    assert require_admin(admin) is admin
+
+
+def test_history_visibility_rules():
+    """任务可见性：管理员看全部；普通用户仅自己的；owner 为空=系统任务仅管理员可见"""
+    from app.api.analyze import _can_view_task
+    from app.database import User
+
+    normal = User(id=7, username="u", password_hash="x", is_admin=False)
+    admin = User(id=1, username="a", password_hash="x", is_admin=True)
+
+    own_task = {"owner_user_id": 7}
+    other_task = {"owner_user_id": 8}
+    system_task = {"owner_user_id": None}
+
+    assert _can_view_task(own_task, normal) is True
+    assert _can_view_task(other_task, normal) is False
+    assert _can_view_task(system_task, normal) is False
+    assert all(_can_view_task(t, admin) for t in (own_task, other_task, system_task))
 
 
 # ─── 优化项验证 ───

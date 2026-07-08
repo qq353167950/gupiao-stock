@@ -47,6 +47,7 @@
         ("/history", "历史记录"),
         ("/glossary", "名词解释"),
     ] %}
+    {% set current_user = request.state.user %}
     <nav class="glass shadow-lg">
         <div class="max-w-7xl mx-auto px-6 py-4">
             <div class="flex items-center justify-between">
@@ -64,6 +65,20 @@
                     <a href="{{ path }}"
                        class="{% if request.url.path == path %}text-purple-600 text-sm font-semibold{% else %}text-gray-600 hover:text-purple-600 text-sm font-medium{% endif %}">{{ label }}</a>
                     {% endfor %}
+                    {% if current_user %}
+                        {% if current_user.is_admin %}
+                        <a href="/admin/users"
+                           class="{% if request.url.path == '/admin/users' %}text-purple-600 text-sm font-semibold{% else %}text-gray-600 hover:text-purple-600 text-sm font-medium{% endif %}">用户管理</a>
+                        {% endif %}
+                        <div class="flex items-center space-x-3 pl-4 border-l border-gray-200">
+                            <span class="text-sm text-gray-700">
+                                {{ current_user.username }}{% if current_user.is_admin %}<span class="ml-1 text-xs px-1.5 py-0.5 rounded bg-purple-100 text-purple-600">管理员</span>{% endif %}
+                            </span>
+                            <button onclick="logout()" class="text-sm text-gray-500 hover:text-red-500">退出</button>
+                        </div>
+                    {% else %}
+                        <a href="/login" class="btn-primary text-white text-sm px-4 py-2 rounded-lg font-medium">登录</a>
+                    {% endif %}
                 </div>
             </div>
         </div>
@@ -73,20 +88,57 @@
 
     <script>
         /**
+         * 服务端注入的登录状态（模板渲染时确定）。
+         * 前端拦截依据：未登录时功能操作直接提示登录，不发无谓的请求。
+         */
+        window.CURRENT_USER = {
+            loggedIn: {{ 'true' if current_user else 'false' }},
+            username: {{ ('"' ~ current_user.username ~ '"') if current_user else 'null' }},
+            isAdmin: {{ 'true' if current_user and current_user.is_admin else 'false' }}
+        };
+
+        /** 未登录则跳转登录页（带回跳地址），返回 true 表示已拦截 */
+        function requireLoginOrRedirect() {
+            if (window.CURRENT_USER.loggedIn) return false;
+            const next = encodeURIComponent(location.pathname + location.search);
+            if (confirm('该功能需要登录后使用，是否前往登录？')) {
+                location.href = '/login?next=' + next;
+            }
+            return true;
+        }
+
+        /**
          * 发起分析任务并跳转进度页（开始分析页与今日推荐页共用）。
-         * 失败时抛出异常，由调用方展示错误提示。
+         * 未登录在前端直接拦截（不发请求）；失败时抛出异常由调用方展示。
          */
         async function postAnalyze(ticker, depth) {
+            if (requireLoginOrRedirect()) {
+                throw new Error('请先登录后再发起分析');
+            }
             const response = await fetch('/api/analyze', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ ticker, depth })
             });
+            if (response.status === 401) {
+                // 前后端状态不同步兜底（如会话过期）：刷新让服务端重渲染登录态
+                location.href = '/login?next=' + encodeURIComponent(location.pathname);
+                throw new Error('登录已过期，请重新登录');
+            }
             if (!response.ok) {
                 throw new Error('分析请求失败');
             }
             const data = await response.json();
             window.location.href = '/analyze?task_id=' + data.task_id;
+        }
+
+        /** 退出登录并刷新（服务端重渲染为游客视图） */
+        async function logout() {
+            try {
+                await fetch('/api/auth/logout', { method: 'POST' });
+            } finally {
+                location.href = '/';
+            }
         }
 
         /** 时间戳格式化为本地日期时间（历史记录等列表共用） */

@@ -12,6 +12,7 @@ requests>=2.31.0
 apscheduler>=3.10.4
 python-dateutil>=2.8.2
 tzdata>=2024.1  # zoneinfo 的 IANA 时区数据（Windows 必需，Linux 冗余无害）
+itsdangerous>=2.1.0  # starlette SessionMiddleware 会话签名依赖
 
 # Deep Analysis Skill 依赖
 akshare>=1.14.0

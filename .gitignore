@@ -24,6 +24,9 @@ wheels/
 .installed.cfg
 *.egg
 
+# 会话签名密钥（运行时自动生成，泄露可伪造登录态）
+data/.session_secret
+
 # 数据库（含 SQLite WAL 模式运行时文件）
 *.db
 *.db-shm
