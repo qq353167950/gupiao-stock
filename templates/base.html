@@ -90,12 +90,14 @@
         /**
          * 服务端注入的登录状态（模板渲染时确定）。
          * 前端拦截依据：未登录时功能操作直接提示登录，不发无谓的请求。
+         * 必须用 tojson 过滤器注入：手工拼引号会被 Jinja2 自动转义成 HTML 实体，
+         * 导致脚本块语法错误，页面全部 JS 失效（退出无反应/列表永远加载中）。
          */
-        window.CURRENT_USER = {
-            loggedIn: {{ 'true' if current_user else 'false' }},
-            username: {{ ('"' ~ current_user.username ~ '"') if current_user else 'null' }},
-            isAdmin: {{ 'true' if current_user and current_user.is_admin else 'false' }}
-        };
+        window.CURRENT_USER = {{ {
+            "loggedIn": current_user is not none,
+            "username": current_user.username if current_user else none,
+            "isAdmin": current_user is not none and current_user.is_admin,
+        } | tojson }};
 
         /** 未登录则跳转登录页（带回跳地址），返回 true 表示已拦截 */
         function requireLoginOrRedirect() {

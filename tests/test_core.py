@@ -541,6 +541,44 @@ def test_history_visibility_rules():
     assert all(_can_view_task(t, admin) for t in (own_task, other_task, system_task))
 
 
+def test_script_blocks_no_html_entities():
+    """回归：script 块内禁止出现 Jinja2 转义产生的 HTML 实体。
+
+    历史 bug：CURRENT_USER 手工拼引号被自动转义成 &#34;，登录后整个公共
+    脚本块语法错误——退出按钮无反应、历史页永远"加载中"。双身份渲染全部
+    模板并解析 CURRENT_USER，确保同类问题不再复发。
+    """
+    import json
+    import re
+    from app.main import templates
+    from app.database import User
+
+    admin = User(id=1, username="admin", password_hash="x", is_admin=True)
+    # 用户名带特殊字符也必须安全注入
+    evil = User(id=2, username="a<b>&'\"c", password_hash="x", is_admin=False)
+
+    pages = [
+        ("index.html", "/"),
+        ("recommendations.html", "/recommendations"),
+        ("history.html", "/history"),
+        ("glossary.html", "/glossary"),
+        ("login.html", "/login"),
+        ("admin_users.html", "/admin/users"),
+    ]
+    for name, path in pages:
+        for user in (None, admin, evil):
+            body = templates.TemplateResponse(_make_request(path, user), name).body.decode("utf-8")
+            for script in re.findall(r"<script>(.*?)</script>", body, re.S):
+                assert "&#" not in script and "&quot;" not in script and "&amp;" not in script, \
+                    f"{name}（{'游客' if user is None else user.username}）script 块含 HTML 转义实体"
+            # CURRENT_USER 必须是合法 JSON 且登录态正确
+            raw = re.search(r"window\.CURRENT_USER = (.*?);", body, re.S).group(1).strip()
+            state = json.loads(raw)
+            assert state["loggedIn"] is (user is not None), f"{name} loggedIn 注入错误"
+            if user:
+                assert state["username"] == user.username
+
+
 # ─── 优化项验证 ───
 
 def test_sqlite_wal_enabled():
