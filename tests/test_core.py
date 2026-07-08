@@ -380,7 +380,7 @@ def test_page_routes_registered():
     paths = {getattr(r, "path", None) for r in app.routes}
     for expected in ("/", "/recommendations", "/history", "/glossary",
                      "/analyze", "/report/{task_id}", "/favicon.ico", "/health",
-                     "/login", "/admin/users"):
+                     "/login", "/admin/users", "/account"):
         assert expected in paths, f"缺少路由 {expected}"
 
 
@@ -564,9 +564,12 @@ def test_script_blocks_no_html_entities():
         ("glossary.html", "/glossary"),
         ("login.html", "/login"),
         ("admin_users.html", "/admin/users"),
+        ("account.html", "/account"),
     ]
     for name, path in pages:
         for user in (None, admin, evil):
+            if name == "account.html" and user is None:
+                continue  # 账号设置页仅登录后渲染（路由层未登录已 302 跳登录）
             body = templates.TemplateResponse(_make_request(path, user), name).body.decode("utf-8")
             for script in re.findall(r"<script>(.*?)</script>", body, re.S):
                 assert "&#" not in script and "&quot;" not in script and "&amp;" not in script, \

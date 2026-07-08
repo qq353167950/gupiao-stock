@@ -163,6 +163,14 @@ async def login_page(request: Request, next: str = "/"):
     return templates.TemplateResponse(request, "login.html", {"next": next})
 
 
+@app.get("/account", response_class=HTMLResponse)
+async def account_page(request: Request):
+    """账号设置页面（修改自己的密码，需登录）"""
+    if request.state.user is None:
+        return RedirectResponse("/login?next=/account", status_code=302)
+    return templates.TemplateResponse(request, "account.html")
+
+
 @app.get("/admin/users", response_class=HTMLResponse)
 async def admin_users_page(request: Request):
     """用户管理页面（仅管理员；未登录跳登录页，非管理员回首页）"""
