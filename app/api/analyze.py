@@ -4,8 +4,7 @@ from typing import Optional, List
 from sqlalchemy.orm import Session
 from app.database import get_db, AnalysisTask, DailyRecommendation
 from app.task_manager import create_task, get_task_status
-from app.config import ANALYSIS_DEPTHS
-from datetime import datetime
+from app.config import ANALYSIS_DEPTHS, now_cn
 
 router = APIRouter()
 
@@ -77,7 +76,7 @@ async def get_recommendations(rec_type: str = "all", db: Session = Depends(get_d
     Args:
         rec_type: 推荐类型（morning/noon/all）
     """
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = now_cn().strftime("%Y-%m-%d")
 
     query = db.query(DailyRecommendation).filter(
         DailyRecommendation.date == today,

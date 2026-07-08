@@ -10,7 +10,7 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from app.config import DATA_DIR
+from app.config import DATA_DIR, now_cn
 
 CALENDAR_CACHE_FILE = DATA_DIR / "trade_calendar.json"
 CACHE_MAX_AGE_DAYS = 30  # 缓存超过 30 天强制刷新
@@ -66,7 +66,7 @@ def _save_cache_file(days: set):
     try:
         CALENDAR_CACHE_FILE.write_text(
             json.dumps(
-                {"cached_at": datetime.now().isoformat(), "trading_days": sorted(days)},
+                {"cached_at": now_cn().isoformat(), "trading_days": sorted(days)},
                 ensure_ascii=False,
             ),
             encoding="utf-8",
@@ -92,7 +92,7 @@ def _ensure_calendar_loaded():
     cached_days, cached_at = _load_from_cache_file()
     cache_fresh = (
         cached_at is not None
-        and (datetime.now() - cached_at) < timedelta(days=CACHE_MAX_AGE_DAYS)
+        and (now_cn() - cached_at) < timedelta(days=CACHE_MAX_AGE_DAYS)
     )
 
     if cache_fresh:
@@ -129,13 +129,13 @@ def is_trading_day(date=None) -> bool:
     判断是否为A股交易日
 
     Args:
-        date: datetime对象，默认为今天
+        date: datetime对象，默认为当前北京时间
 
     Returns:
         bool: True表示交易日，False表示休市
     """
     if date is None:
-        date = datetime.now()
+        date = now_cn()
 
     date_str = date.strftime("%Y-%m-%d")
 
@@ -156,13 +156,13 @@ def get_next_trading_day(date=None):
     获取下一个交易日
 
     Args:
-        date: datetime对象，默认为今天
+        date: datetime对象，默认为当前北京时间
 
     Returns:
         datetime: 下一个交易日；30 天内找不到返回 None
     """
     if date is None:
-        date = datetime.now()
+        date = now_cn()
 
     next_day = date + timedelta(days=1)
 
@@ -180,13 +180,13 @@ def days_until_next_trading_day(date=None):
     距离下一个交易日的天数
 
     Args:
-        date: datetime对象，默认为今天
+        date: datetime对象，默认为当前北京时间
 
     Returns:
         int: 天数；找不到返回 None
     """
     if date is None:
-        date = datetime.now()
+        date = now_cn()
 
     next_trading = get_next_trading_day(date)
     if next_trading:
@@ -195,7 +195,7 @@ def days_until_next_trading_day(date=None):
 
 
 if __name__ == "__main__":
-    today = datetime.now()
+    today = now_cn()
 
     print("=" * 70)
     print("A股交易日判断")

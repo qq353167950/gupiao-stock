@@ -1,5 +1,5 @@
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from contextlib import asynccontextmanager
@@ -53,6 +53,30 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 # 注册路由
 app.include_router(analyze_router, prefix="/api", tags=["分析"])
+
+
+# 网站图标（内联 SVG，上升K线主题）
+# 以路由而非静态文件提供：报告页为 skill 生成的独立 HTML（无法插 link 标签），
+# 浏览器对其默认请求 /favicon.ico，缺失会在访问日志刷 404
+_FAVICON_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">'
+    '<rect width="32" height="32" rx="6" fill="#667eea"/>'
+    '<path d="M6 22 L13 15 L18 19 L26 9" stroke="#fff" stroke-width="3" '
+    'fill="none" stroke-linecap="round" stroke-linejoin="round"/>'
+    '<path d="M20 9 H26 V15" stroke="#fff" stroke-width="3" '
+    'fill="none" stroke-linecap="round" stroke-linejoin="round"/>'
+    "</svg>"
+)
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    """网站图标（浏览器自动请求，无此路由则每次访问都产生 404 日志）"""
+    return Response(
+        content=_FAVICON_SVG,
+        media_type="image/svg+xml",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
 
 
 @app.get("/", response_class=HTMLResponse)

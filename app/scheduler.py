@@ -9,7 +9,7 @@
 import asyncio
 import shutil
 import time
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -26,10 +26,14 @@ from app.config import (
     CACHE_RETENTION_DAYS,
     LOG_RETENTION_DAYS,
     TASK_RETENTION_DAYS,
+    TZ_SHANGHAI,
+    now_cn,
     parse_hhmm,
 )
 
-scheduler = AsyncIOScheduler()
+# 调度器显式绑定北京时间：不依赖服务器 TZ，海外容器上 15:10/08:20/03:30
+# 均按北京时间触发（与交易时段语义一致）
+scheduler = AsyncIOScheduler(timezone=TZ_SHANGHAI)
 
 # 批量分析后台任务强引用（防 GC）
 _batch_tasks: set = set()
@@ -41,7 +45,7 @@ def archive_old_recommendations():
 
     db = SessionLocal()
     try:
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = now_cn().strftime("%Y-%m-%d")
 
         # 查找今日之前的全部未归档推荐（比只查"昨天"健壮：停机一天也不会漏归档）
         old_recs = db.query(DailyRecommendation).filter(
@@ -76,7 +80,7 @@ async def after_market_analysis_job():
     from app.trading_calendar import is_trading_day
 
     print(f"\n{'='*70}")
-    print(f"📈 收盘后分析 - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"📈 收盘后分析 - {now_cn().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"{'='*70}\n")
 
     # 判断今天是否为交易日
@@ -118,7 +122,7 @@ def _build_today_digest() -> tuple:
     from app.stock_pool import get_stock_category
     from app import notifier
 
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = now_cn().strftime("%Y-%m-%d")
     db = SessionLocal()
     try:
         recs = db.query(DailyRecommendation).filter(
@@ -153,7 +157,7 @@ async def morning_push_job():
     from app import notifier
 
     print(f"\n{'='*70}")
-    print(f"🌅 早盘推荐推送 - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"🌅 早盘推荐推送 - {now_cn().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"{'='*70}\n")
 
     # 判断今天是否为交易日
@@ -233,11 +237,11 @@ def _do_cleanup_sync():
     # 4. 数据库历史记录（任务表 + 推荐历史表，防止无限增长拖慢查询）
     db = SessionLocal()
     try:
-        cutoff_dt = datetime.now() - timedelta(days=TASK_RETENTION_DAYS)
+        cutoff_dt = now_cn() - timedelta(days=TASK_RETENTION_DAYS)
         deleted = db.query(AnalysisTask).filter(
             AnalysisTask.created_at < cutoff_dt
         ).delete()
-        cutoff_date = (datetime.now() - timedelta(days=TASK_RETENTION_DAYS)).strftime("%Y-%m-%d")
+        cutoff_date = cutoff_dt.strftime("%Y-%m-%d")
         deleted_hist = db.query(RecommendationHistory).filter(
             RecommendationHistory.date < cutoff_date
         ).delete()
@@ -250,7 +254,7 @@ def _do_cleanup_sync():
 async def cleanup_job():
     """每日磁盘与数据库清理 + Skill 更新检查"""
     print(f"\n{'='*70}")
-    print(f"🧹 每日清理 - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"🧹 每日清理 - {now_cn().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"{'='*70}\n")
 
     try:
@@ -277,10 +281,12 @@ def start_scheduler():
     push_h, push_m = parse_hhmm(MORNING_PUSH_TIME, "08:20")
     cleanup_h, cleanup_m = parse_hhmm(CLEANUP_TIME, "03:30")
 
-    # 收盘后分析（自动判断交易日）
+    # 收盘后分析（自动判断交易日；trigger 必须显式传时区——
+    # CronTrigger 未传 timezone 时在实例化瞬间固化服务器本地时区，不继承 scheduler 设置）
     scheduler.add_job(
         after_market_analysis_job,
-        trigger=CronTrigger(day_of_week='mon-fri', hour=analysis_h, minute=analysis_m),
+        trigger=CronTrigger(day_of_week='mon-fri', hour=analysis_h, minute=analysis_m,
+                            timezone=TZ_SHANGHAI),
         id='after_market_analysis',
         name=f'收盘后分析（{analysis_h:02d}:{analysis_m:02d}）',
         replace_existing=True
@@ -289,7 +295,8 @@ def start_scheduler():
     # 早盘推荐推送（自动判断交易日）
     scheduler.add_job(
         morning_push_job,
-        trigger=CronTrigger(day_of_week='mon-fri', hour=push_h, minute=push_m),
+        trigger=CronTrigger(day_of_week='mon-fri', hour=push_h, minute=push_m,
+                            timezone=TZ_SHANGHAI),
         id='morning_push',
         name=f'早盘推荐推送（{push_h:02d}:{push_m:02d}）',
         replace_existing=True
@@ -298,14 +305,14 @@ def start_scheduler():
     # 每日清理（每天执行，与是否交易日无关）
     scheduler.add_job(
         cleanup_job,
-        trigger=CronTrigger(hour=cleanup_h, minute=cleanup_m),
+        trigger=CronTrigger(hour=cleanup_h, minute=cleanup_m, timezone=TZ_SHANGHAI),
         id='daily_cleanup',
         name=f'每日清理（{cleanup_h:02d}:{cleanup_m:02d}）',
         replace_existing=True
     )
 
     scheduler.start()
-    print("✅ 定时任务调度器已启动")
+    print("✅ 定时任务调度器已启动（北京时间）")
     print(f"   - 收盘后分析：每交易日 {analysis_h:02d}:{analysis_m:02d}（深度: {DAILY_ANALYSIS_DEPTH}）")
     print(f"   - 早盘推送：  每交易日 {push_h:02d}:{push_m:02d}")
     print(f"   - 磁盘清理：  每天 {cleanup_h:02d}:{cleanup_m:02d}")

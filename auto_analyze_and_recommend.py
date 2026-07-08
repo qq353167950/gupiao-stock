@@ -16,7 +16,7 @@ if str(BASE_DIR) not in sys.path:
 
 import asyncio
 import math
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Dict, List
 
 from app.config import (
@@ -24,6 +24,7 @@ from app.config import (
     MAX_CONCURRENT_TASKS,
     NOTIFY_ON_ANALYSIS_COMPLETE,
     PUBLIC_BASE_URL,
+    now_cn,
 )
 from app.database import SessionLocal, DailyRecommendation, AnalysisTask
 from app.market_data import get_sector_hot_stocks
@@ -42,7 +43,7 @@ def _determine_target_date() -> str:
     """
     from app.trading_calendar import is_trading_day, get_next_trading_day
 
-    now = datetime.now()
+    now = now_cn()
     if is_trading_day(now) and now.hour < 9:
         return now.strftime("%Y-%m-%d")
 
@@ -239,7 +240,7 @@ async def auto_analyze_and_recommend(depth: str = "standard", recommendation_typ
 
     print(f"\n{'='*70}")
     print(f"🔥 开始{'早盘' if recommendation_type == 'morning' else '午盘'}推荐流程")
-    print(f"   时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"   时间: {now_cn().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"   深度: {depth} | 每板块选股: {STOCKS_PER_SECTOR}")
     print(f"{'='*70}\n")
 

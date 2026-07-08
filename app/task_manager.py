@@ -9,10 +9,9 @@ import uuid
 import json
 import re
 import concurrent.futures
-from datetime import datetime
 from typing import Optional, Dict, Any
 
-from app.config import SKILL_REPORTS_DIR, MAX_CONCURRENT_TASKS
+from app.config import SKILL_REPORTS_DIR, MAX_CONCURRENT_TASKS, now_cn
 from app.database import SessionLocal, AnalysisTask
 from app.enhanced_analyzer import EnhancedAnalyzer
 
@@ -92,7 +91,7 @@ async def run_analysis(task_id: str, ticker: str, depth: str = "standard"):
             _update_task(
                 task_id,
                 status="running",
-                started_at=datetime.now(),
+                started_at=now_cn(),
                 progress=5,
                 current_stage="初始化增强分析引擎",
             )
@@ -165,7 +164,7 @@ async def run_analysis(task_id: str, ticker: str, depth: str = "standard"):
                     progress=100,
                     current_stage="完成",
                     status="completed",
-                    completed_at=datetime.now(),
+                    completed_at=now_cn(),
                 )
                 _update_task(task_id, **fields)
 

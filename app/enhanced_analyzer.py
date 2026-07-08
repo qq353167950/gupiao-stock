@@ -14,7 +14,6 @@ import subprocess
 import time
 from pathlib import Path
 from typing import Dict, Any, Optional
-from datetime import datetime
 
 from app.config import (
     get_skill_path,
@@ -24,6 +23,7 @@ from app.config import (
     DEPTH_MAP,
     ANALYSIS_TIMEOUTS,
     FETCHER_TIMEOUT,
+    now_cn,
 )
 from app.llm_client import llm_client
 
@@ -56,7 +56,7 @@ class EnhancedAnalyzer:
             "ticker": ticker,
             "name": name,
             "depth": depth,
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": now_cn().isoformat(),
             "trap_detection": None,
             "deep_analysis": None,
             "lhb_analysis": None,

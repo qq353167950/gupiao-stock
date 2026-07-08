@@ -1,8 +1,8 @@
-from datetime import datetime, timedelta
+from datetime import timedelta
 from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean, Text, create_engine, event
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
-from app.config import DATABASE_URL, REPORT_EXPIRE_HOURS
+from app.config import DATABASE_URL, REPORT_EXPIRE_HOURS, now_cn
 
 Base = declarative_base()
 
@@ -28,7 +28,7 @@ class AnalysisTask(Base):
     enhanced_result = Column(Text)  # JSON格式的完整增强分析结果
     composite_score = Column(Float)  # 综合评分（0-100）
     risk_level = Column(String(50))  # 风险等级
-    created_at = Column(DateTime, default=datetime.now, index=True)  # 清理任务按时间删除
+    created_at = Column(DateTime, default=now_cn, index=True)  # 清理任务按时间删除（北京时间）
     started_at = Column(DateTime)
     completed_at = Column(DateTime)
     expires_at = Column(DateTime)
@@ -89,7 +89,7 @@ class DailyRecommendation(Base):
     reason = Column(String)  # 推荐理由
     recommendation_type = Column(String, default="morning")  # 推荐类型：morning(早盘)
     is_archived = Column(Boolean, default=False)  # 是否已归档
-    created_at = Column(DateTime, default=datetime.now)
+    created_at = Column(DateTime, default=now_cn)
     
     def to_dict(self):
         return {
@@ -120,7 +120,7 @@ class RecommendationHistory(Base):
     bullish_ratio = Column(Float)  # 看多比例
     reason = Column(String)  # 推荐理由
     recommendation_type = Column(String)  # 推荐类型
-    archived_at = Column(DateTime, default=datetime.now)  # 归档时间
+    archived_at = Column(DateTime, default=now_cn)  # 归档时间（北京时间）
     
     def to_dict(self):
         return {
@@ -180,7 +180,7 @@ def recover_zombie_tasks() -> int:
         for task in zombies:
             task.status = "failed"
             task.error_message = "服务重启导致任务中断，请重新发起分析"
-            task.completed_at = datetime.now()
+            task.completed_at = now_cn()
         if zombies:
             db.commit()
             print(f"♻️  已恢复 {len(zombies)} 个僵尸任务（上次进程遗留的 running/pending → failed）")

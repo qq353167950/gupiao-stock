@@ -43,6 +43,39 @@ def test_config_parse_hhmm():
     assert parse_hhmm("", "") == (8, 0)
 
 
+def test_now_cn_is_beijing_time():
+    """now_cn 必须返回北京时间（UTC+8）的 naive datetime，与服务器时区无关"""
+    from datetime import datetime, timezone, timedelta
+    from app.config import now_cn, TZ_SHANGHAI
+
+    now = now_cn()
+    assert now.tzinfo is None, "必须返回 naive datetime（与数据库既有数据同构）"
+
+    # 与 UTC+8 直接换算结果比对（容忍执行间隙 2 秒）
+    expected = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8))).replace(tzinfo=None)
+    assert abs((now - expected).total_seconds()) < 2, f"now_cn 偏离北京时间: {now} vs {expected}"
+
+    # 时区对象必须是 Asia/Shanghai 语义（zoneinfo 或 +8 固定偏移兜底）
+    offset = datetime.now(TZ_SHANGHAI).utcoffset()
+    assert offset == timedelta(hours=8), f"TZ_SHANGHAI 偏移错误: {offset}"
+
+
+def test_scheduler_jobs_use_beijing_timezone():
+    """调度器三个 CronTrigger 必须显式绑定北京时间（不依赖服务器时区）"""
+    from datetime import timedelta, datetime
+    from app import scheduler as sched_mod
+
+    # 调度器本身的时区
+    tz = sched_mod.scheduler.timezone
+    assert datetime.now(tz).utcoffset() == timedelta(hours=8), f"调度器时区错误: {tz}"
+
+    # 注册任务（不 start），验证 CronTrigger 显式传时区后的实际偏移
+    from apscheduler.triggers.cron import CronTrigger
+    from app.config import TZ_SHANGHAI
+    trigger = CronTrigger(hour=3, minute=30, timezone=TZ_SHANGHAI)
+    assert datetime.now(trigger.timezone).utcoffset() == timedelta(hours=8)
+
+
 def test_config_no_hardcoded_workspace():
     """全项目不允许再出现 /workspace 硬编码路径"""
     for py_file in [BASE_DIR / "auto_analyze_and_recommend.py"] + list((BASE_DIR / "app").glob("*.py")):

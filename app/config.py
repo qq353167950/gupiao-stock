@@ -2,10 +2,32 @@
 全局配置模块
 - 启动时统一加载 .env / .env.llm 到环境变量（零依赖，复用 UZI-Skill run.py 的加载模式）
 - 所有部署相关参数均可通过环境变量覆盖，改配置无需改代码
+- now_cn()：全项目统一的北京时间来源（A股业务时间语义与服务器时区解耦）
 """
 import os
 import sys
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
+
+# ─── 北京时间（全项目唯一时间源）───
+# A股的交易日判断、收盘分析、早盘推送、推荐日期全部绑定北京时间；
+# 显式时区计算不依赖服务器 TZ 设置，海外容器/面板注入的任何时区均不影响业务。
+try:
+    from zoneinfo import ZoneInfo
+    TZ_SHANGHAI = ZoneInfo("Asia/Shanghai")
+except Exception:
+    # 系统缺 IANA 时区数据库（如精简 Windows 且未装 tzdata 包）时兜底：
+    # Asia/Shanghai 自 1991 年起无夏令时，固定 UTC+8 完全等价
+    TZ_SHANGHAI = timezone(timedelta(hours=8), name="Asia/Shanghai")
+
+
+def now_cn() -> datetime:
+    """返回当前北京时间（naive datetime，与数据库既有数据格式一致）。
+
+    去掉 tzinfo 是刻意的：SQLite 中历史数据全部为 naive，保持同构才能
+    直接比较、strftime、做 timedelta 运算，无需数据迁移。
+    """
+    return datetime.now(TZ_SHANGHAI).replace(tzinfo=None)
 
 # 路径配置（必须最先定义，.env 加载依赖 BASE_DIR）
 BASE_DIR = Path(__file__).parent.parent

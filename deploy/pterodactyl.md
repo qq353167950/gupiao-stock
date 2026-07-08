@@ -142,8 +142,9 @@ python -c "from app import notifier; notifier.send('测试', '面板部署成功
 
 **分析全部超时** → 欧洲 IP 被数据源限流，配置 `MX_APIKEY`；仍不行则建议换大陆 VPS。
 
-**时间不对/定时任务没在 15:10 触发** → `start.py` 已强制 `TZ=Asia/Shanghai`，若仍不对，
-在面板变量加 `TZ=Asia/Shanghai`。
+**时间不对/定时任务没在 15:10 触发** → 已修复：调度与业务时间显式使用北京时间
+（`config.now_cn()` + APScheduler `timezone=Asia/Shanghai`），不受面板注入的宿主机
+`TZ` 影响，无需任何面板变量。
 
 **skill 更新失败 `ls-remote 失败`** → 容器无法直连 GitHub，配置 `GITHUB_PROXY=https://gh-proxy.com/`。
 

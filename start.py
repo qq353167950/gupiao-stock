@@ -23,9 +23,12 @@ os.chdir(BASE_DIR)
 sys.path.insert(0, str(BASE_DIR))
 
 # ─── 1. 时区校正（必须在导入 app 之前）───
-# APScheduler 与 datetime.now() 均使用本地时区；海外容器默认 UTC 会导致
-# 15:10 收盘分析实际在北京时间 23:10 才跑。强制北京时间保证调度语义正确。
-os.environ.setdefault("TZ", "Asia/Shanghai")
+# app 内业务时间已统一走 config.now_cn()（显式北京时间，不依赖本进程时区），
+# 此处强制 TZ 主要为 skill 子进程（deep-analysis 等用 datetime.now()）兜底：
+# 海外容器默认 UTC 会导致其报告日期/缓存键错位。
+# 注意必须强制覆盖而非 setdefault：Pterodactyl 等面板会注入宿主机 TZ（如
+# America/New_York），setdefault 会被其抢占，导致子进程仍跑在外国时区。
+os.environ["TZ"] = "Asia/Shanghai"
 if hasattr(time, "tzset"):  # 仅 Unix；Windows 本地调试跳过
     time.tzset()
 

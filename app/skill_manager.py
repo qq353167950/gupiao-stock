@@ -26,6 +26,7 @@ from app.config import (
     SKILL_BRANCH,
     GITHUB_PROXY,
     SKILL_UPDATE_INTERVAL_DAYS,
+    now_cn,
 )
 
 # 持久化仓库与版本文件位置（skills/ 目录下的隐藏成员）
@@ -90,9 +91,9 @@ def write_version(commit: str, updated: bool):
     """写版本文件。updated=True 表示本次实际同步了文件（更新 updated_at）"""
     data = read_version()
     data["commit"] = commit
-    data["checked_at"] = datetime.now().isoformat()
+    data["checked_at"] = now_cn().isoformat()
     if updated:
-        data["updated_at"] = datetime.now().isoformat()
+        data["updated_at"] = now_cn().isoformat()
     data["source"] = effective_repo_url()
     VERSION_FILE.write_text(
         json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -101,7 +102,7 @@ def write_version(commit: str, updated: bool):
 
 def should_check_now(version_data: dict, interval_days: int, now: datetime = None) -> bool:
     """根据上次检查时间和间隔判断是否需要执行更新检查（纯函数，便于测试）"""
-    now = now or datetime.now()
+    now = now or now_cn()
     checked_at_s = version_data.get("checked_at")
     if not checked_at_s:
         return True
