@@ -5,8 +5,14 @@
 - 磁盘清理（默认 03:30）：清理过期报告 / skill 缓存 / 日志 / 历史任务记录
 
 时间均可通过环境变量覆盖：AFTER_MARKET_ANALYSIS_TIME / MORNING_PUSH_TIME / CLEANUP_TIME
+
+错过补跑：APScheduler 为纯内存调度，重启后只会等下一个触发点——若服务在
+触发时刻宕机/重启（如 15:10 后才拉代码重启），当天任务会静默丢失。
+因此每个任务启动时把"今天已尝试"记入 data/.scheduler-state.json，
+服务启动时检查"今天该跑的点已过但未尝试"的任务并安排一次性补跑。
 """
 import asyncio
+import json
 import shutil
 import time
 from datetime import timedelta
@@ -19,6 +25,7 @@ from app.config import (
     MORNING_PUSH_TIME,
     CLEANUP_TIME,
     DAILY_ANALYSIS_DEPTH,
+    DATA_DIR,
     SKILL_REPORTS_DIR,
     SKILL_CACHE_DIR,
     LOGS_DIR,
@@ -37,6 +44,61 @@ scheduler = AsyncIOScheduler(timezone=TZ_SHANGHAI)
 
 # 批量分析后台任务强引用（防 GC）
 _batch_tasks: set = set()
+
+# ─── 补跑状态（记录各任务当天是否已尝试执行）───
+SCHEDULER_STATE_FILE = DATA_DIR / ".scheduler-state.json"
+
+# 早盘推送补跑截止（北京时间小时）：收盘后再推"早盘推荐"已无意义
+MORNING_PUSH_CATCHUP_CUTOFF_HOUR = 15
+
+
+def _read_sched_state() -> dict:
+    """读补跑状态文件 {job_id: "YYYY-MM-DD"}，不存在或损坏返回空 dict"""
+    if not SCHEDULER_STATE_FILE.exists():
+        return {}
+    try:
+        return json.loads(SCHEDULER_STATE_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _mark_attempt(job_id: str):
+    """记录任务今天已尝试执行（attempt 语义：启动即记，中途失败不重跑——
+    反复重启场景下避免同一天把重型批量分析反复拉起）"""
+    state = _read_sched_state()
+    state[job_id] = now_cn().strftime("%Y-%m-%d")
+    try:
+        SCHEDULER_STATE_FILE.write_text(
+            json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    except Exception as e:
+        print(f"⚠️  调度状态写入失败（重启后可能重复补跑）: {e}")
+
+
+def _catchup_decisions(state: dict, now) -> list:
+    """纯函数：返回今天已过触发点但未尝试过的 job_id 列表（供启动补跑）。
+
+    - daily_cleanup：每天
+    - after_market_analysis：仅周一至五（是否交易日由任务内部判断）
+    - morning_push：仅周一至五，且未过 15:00 截止（收盘后推"早盘推荐"无意义）
+    """
+    analysis_hm = parse_hhmm(AFTER_MARKET_ANALYSIS_TIME, "15:10")
+    push_hm = parse_hhmm(MORNING_PUSH_TIME, "08:20")
+    cleanup_hm = parse_hhmm(CLEANUP_TIME, "03:30")
+
+    today = now.strftime("%Y-%m-%d")
+    now_hm = (now.hour, now.minute)
+    is_weekday = now.weekday() < 5
+
+    due = []
+    if state.get("daily_cleanup") != today and now_hm >= cleanup_hm:
+        due.append("daily_cleanup")
+    if is_weekday and state.get("after_market_analysis") != today and now_hm >= analysis_hm:
+        due.append("after_market_analysis")
+    if (is_weekday and state.get("morning_push") != today
+            and now_hm >= push_hm and now.hour < MORNING_PUSH_CATCHUP_CUTOFF_HOUR):
+        due.append("morning_push")
+    return due
 
 
 def archive_old_recommendations():
@@ -79,6 +141,7 @@ async def after_market_analysis_job():
     """收盘后分析任务 - 仅交易日执行"""
     from app.trading_calendar import is_trading_day
 
+    _mark_attempt("after_market_analysis")
     print(f"\n{'='*70}")
     print(f"📈 收盘后分析 - {now_cn().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"{'='*70}\n")
@@ -156,6 +219,7 @@ async def morning_push_job():
     from app.trading_calendar import is_trading_day
     from app import notifier
 
+    _mark_attempt("morning_push")
     print(f"\n{'='*70}")
     print(f"🌅 早盘推荐推送 - {now_cn().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"{'='*70}\n")
@@ -253,6 +317,7 @@ def _do_cleanup_sync():
 
 async def cleanup_job():
     """每日磁盘与数据库清理 + Skill 更新检查"""
+    _mark_attempt("daily_cleanup")
     print(f"\n{'='*70}")
     print(f"🧹 每日清理 - {now_cn().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"{'='*70}\n")
@@ -317,6 +382,28 @@ def start_scheduler():
     print(f"   - 早盘推送：  每交易日 {push_h:02d}:{push_m:02d}")
     print(f"   - 磁盘清理：  每天 {cleanup_h:02d}:{cleanup_m:02d}")
     print("   - 自动跳过休市日")
+
+    # ─── 错过补跑：今天已过触发点但从未尝试的任务，安排一次性执行 ───
+    # 场景：15:10 后才重启服务（更新代码/宕机恢复），Cron 只会等明天，
+    # 当天的收盘分析会静默丢失。延迟 60 秒执行，让应用完全就绪（skill 检查等）。
+    _job_funcs = {
+        "daily_cleanup": cleanup_job,
+        "after_market_analysis": after_market_analysis_job,
+        "morning_push": morning_push_job,
+    }
+    missed = _catchup_decisions(_read_sched_state(), now_cn())
+    for job_id in missed:
+        run_at = now_cn() + timedelta(seconds=60)
+        scheduler.add_job(
+            _job_funcs[job_id],
+            trigger="date",
+            run_date=run_at,
+            id=f"catchup_{job_id}",
+            name=f"补跑-{job_id}",
+            replace_existing=True,
+        )
+    if missed:
+        print(f"   ⏰ 检测到今日错过的任务，60 秒后补跑: {', '.join(missed)}")
 
 
 def stop_scheduler():

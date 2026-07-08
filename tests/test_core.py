@@ -582,6 +582,60 @@ def test_script_blocks_no_html_entities():
                 assert state["username"] == user.username
 
 
+# ─── 调度器补跑 ───
+
+def test_scheduler_catchup_decisions():
+    """错过补跑决策：已过点未尝试→补；已尝试/未到点/周末/推送过截止→不补"""
+    from datetime import datetime
+    from app.scheduler import _catchup_decisions
+
+    # 2026-07-08 是周三（工作日）
+    wed_16 = datetime(2026, 7, 8, 16, 0)   # 16:00：三个点全过，推送已过 15:00 截止
+    wed_10 = datetime(2026, 7, 8, 10, 0)   # 10:00：清理+推送已过点，分析未到
+    wed_02 = datetime(2026, 7, 8, 2, 0)    # 02:00：全部未到点
+    sat_16 = datetime(2026, 7, 11, 16, 0)  # 周六
+
+    # 全新状态（如首次部署/状态文件丢失）
+    assert _catchup_decisions({}, wed_16) == ["daily_cleanup", "after_market_analysis"]
+    assert _catchup_decisions({}, wed_10) == ["daily_cleanup", "morning_push"]
+    assert _catchup_decisions({}, wed_02) == []
+    # 周末：仅清理补跑（分析/推送为工作日任务）
+    assert _catchup_decisions({}, sat_16) == ["daily_cleanup"]
+
+    # 今天已全部尝试过（正常运行日重启）→ 什么都不补
+    today_all = {"daily_cleanup": "2026-07-08", "after_market_analysis": "2026-07-08",
+                 "morning_push": "2026-07-08"}
+    assert _catchup_decisions(today_all, wed_16) == []
+
+    # 状态是昨天的（每天首次启动/触发时刻宕机）→ 该补的补
+    yesterday_all = {k: "2026-07-07" for k in today_all}
+    assert _catchup_decisions(yesterday_all, wed_16) == ["daily_cleanup", "after_market_analysis"]
+
+    # 推送在截止前未尝试 → 补；分析已尝试 → 不补
+    partial = {"daily_cleanup": "2026-07-08", "after_market_analysis": "2026-07-08"}
+    assert _catchup_decisions(partial, wed_10) == ["morning_push"]
+
+
+def test_scheduler_state_roundtrip():
+    """补跑状态文件读写往返与损坏容错"""
+    from app import scheduler as sched
+    original = sched._read_sched_state()
+    try:
+        sched._mark_attempt("daily_cleanup")
+        state = sched._read_sched_state()
+        from app.config import now_cn
+        assert state["daily_cleanup"] == now_cn().strftime("%Y-%m-%d")
+
+        # 损坏文件 → 返回空 dict 不抛异常
+        sched.SCHEDULER_STATE_FILE.write_text("{not-json", encoding="utf-8")
+        assert sched._read_sched_state() == {}
+    finally:
+        # 还原现场
+        import json as _json
+        sched.SCHEDULER_STATE_FILE.write_text(
+            _json.dumps(original, ensure_ascii=False), encoding="utf-8")
+
+
 # ─── 优化项验证 ───
 
 def test_sqlite_wal_enabled():
