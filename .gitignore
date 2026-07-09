@@ -30,6 +30,9 @@ data/.session_secret
 # 调度器补跑状态（运行时生成；入库会把本机"已跑"状态带到新部署导致误判）
 data/.scheduler-state.json
 
+# 批量分析批次快照（运行时生成，断点续跑用；同上不入库）
+data/.batch-state.json
+
 # 数据库（含 SQLite WAL 模式运行时文件）
 *.db
 *.db-shm
@@ -66,9 +69,11 @@ temp/
 skills/.repo/
 skills/.skill-version.json
 
-# Skill 运行时产物（分析缓存与报告，运行后自动生成）
-skills/deep-analysis/scripts/.cache/
-skills/deep-analysis/scripts/reports/
+# Skill 安装副本（启动时由 skill_manager 从上游仓库自动安装/更新，非本仓库源码）
+skills/deep-analysis/
+skills/lhb-analyzer/
+skills/trap-detector/
+skills/investor-panel/
 
 # Claude Code 本地工作目录（操作日志与审查报告，不进入公开仓库）
 .claude/
