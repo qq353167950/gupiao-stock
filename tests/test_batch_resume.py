@@ -92,27 +92,60 @@ def _make_state(target_date, status="running", stocks=None):
 
 
 def test_is_batch_resumable_time_window():
-    """目标日期未来可续；当天 15 点前可续、15 点后不可；过期不可"""
+    """时效判定：现在 + 预估耗时 ≤ 目标日 9:30 开盘才可续跑。
+
+    standard 深度单只 25 分钟（默认并发 2）：1 只股票预估 25 分钟。
+    """
     from app.batch_state import is_batch_resumable
 
-    now = datetime(2026, 7, 10, 9, 0)
-    assert is_batch_resumable(_make_state("2026-07-11"), now) is True   # 未来
-    assert is_batch_resumable(_make_state("2026-07-10"), now) is True   # 当天 9 点
-    assert is_batch_resumable(_make_state("2026-07-09"), now) is False  # 昨天
+    # 目标日前一天 15:30 中断重启（收盘分析刚启动就挂）→ 充裕，可续
+    assert is_batch_resumable(
+        _make_state("2026-07-10"), datetime(2026, 7, 9, 15, 30)) is True
 
-    late = datetime(2026, 7, 10, 15, 30)
-    assert is_batch_resumable(_make_state("2026-07-10"), late) is False  # 当天 15 点后
+    # 目标日当天 8:00 → 8:25 完成 < 9:30 → 可续
+    assert is_batch_resumable(
+        _make_state("2026-07-10"), datetime(2026, 7, 10, 8, 0)) is True
+
+    # 目标日当天 9:20 → 9:45 完成 > 9:30 开盘 → 放弃（哪怕只差几分钟）
+    assert is_batch_resumable(
+        _make_state("2026-07-10"), datetime(2026, 7, 10, 9, 20)) is False
+
+    # 目标日当天 9:40（已开盘）→ 放弃
+    assert is_batch_resumable(
+        _make_state("2026-07-10"), datetime(2026, 7, 10, 9, 40)) is False
+
+    # 目标日已过 → 放弃
+    assert is_batch_resumable(
+        _make_state("2026-07-09"), datetime(2026, 7, 10, 8, 0)) is False
+
+
+def test_is_batch_resumable_scales_with_stock_count():
+    """股票越多预估耗时越长，同一时间点大批次可能不可续"""
+    from app.batch_state import is_batch_resumable
+    from app.config import MAX_CONCURRENT_TASKS
+
+    # 20 只 standard：ceil(20/并发) × 25 分钟；并发 2 时 = 250 分钟
+    big = _make_state("2026-07-10", stocks=[
+        {"ticker": f"00000{i}.SZ", "name": f"股{i}", "sector": "测试", "task_id": None}
+        for i in range(20)
+    ])
+    # 目标日 6:00：仅剩 210 分钟，250 > 210 → 不可续（并发 ≤2 的默认配置下）
+    if MAX_CONCURRENT_TASKS <= 2:
+        assert is_batch_resumable(big, datetime(2026, 7, 10, 6, 0)) is False
+    # 前一天 20:00：还有 13.5 小时 → 可续
+    assert is_batch_resumable(big, datetime(2026, 7, 9, 20, 0)) is True
 
 
 def test_is_batch_resumable_invalid_states():
     """None/done/空 stocks/缺 target_date 均不可续"""
     from app.batch_state import is_batch_resumable
 
-    now = datetime(2026, 7, 10, 9, 0)
+    now = datetime(2026, 7, 10, 8, 0)
     assert is_batch_resumable(None, now) is False
     assert is_batch_resumable(_make_state("2026-07-11", status="done"), now) is False
     assert is_batch_resumable(_make_state("2026-07-11", stocks=[]), now) is False
-    assert is_batch_resumable(_make_state("", ), now) is False
+    assert is_batch_resumable(_make_state(""), now) is False
+    assert is_batch_resumable(_make_state("not-a-date"), now) is False
 
 
 # ─── 续跑复用已完成任务（数据库集成） ───
@@ -260,6 +293,35 @@ def test_resume_end_to_end(tmp_path, monkeypatch):
             db.commit()
         finally:
             db.close()
+
+
+# ─── 无推荐原因诊断 ───
+
+def test_diagnose_no_recommendation_variants(tmp_path, monkeypatch):
+    """无推荐时的推送文案必须区分：正常无入选 / 中断放弃 / 未执行"""
+    from app import batch_state
+    from app import scheduler as sched_mod
+    monkeypatch.setattr(batch_state, "BATCH_STATE_FILE", tmp_path / ".batch-state.json")
+
+    today = "2026-07-09"
+
+    # 批次 done 但无推荐 → 正常筛选无入选
+    batch_state.save_batch_state(today, "morning", "standard", [
+        {"ticker": "000001.SZ", "name": "平安银行", "sector": "金融", "task_id": None}
+    ], status="done")
+    assert "没有股票通过筛选" in sched_mod._diagnose_no_recommendation(today)
+
+    # 批次 running 且不可续（目标日已开盘）→ 中断说明
+    batch_state.save_batch_state(today, "morning", "standard", [
+        {"ticker": "000001.SZ", "name": "平安银行", "sector": "金融", "task_id": None}
+    ], status="running")
+    msg = sched_mod._diagnose_no_recommendation(today)
+    assert "中断" in msg and "开盘前" in msg
+
+    # 无批次快照且近期无系统任务 → 未执行说明
+    batch_state.BATCH_STATE_FILE.unlink()
+    msg = sched_mod._diagnose_no_recommendation(today)
+    assert ("未执行批量分析" in msg) or ("全部失败" in msg) or ("进行中" in msg)
 
 
 if __name__ == "__main__":

@@ -17,15 +17,17 @@ recover_zombie_tasks 标 failed，但"这批要分析哪些股票、哪些已完
 import json
 import os
 import tempfile
+from datetime import datetime
 from typing import List, Optional
 
 from app.config import DATA_DIR, now_cn
 
 BATCH_STATE_FILE = DATA_DIR / ".batch-state.json"
 
-# 续跑截止（北京时间小时）：目标日收盘临近后再补"当日推荐"已无意义，
-# 与 scheduler.MORNING_PUSH_CATCHUP_CUTOFF_HOUR 语义一致
-BATCH_RESUME_CUTOFF_HOUR = 15
+# 推荐时效截止：目标日开盘时间（北京时间 9:30）。
+# 续跑必须在开盘前跑完才有意义——开盘后早盘推荐已失去时效。
+MARKET_OPEN_HOUR = 9
+MARKET_OPEN_MINUTE = 30
 
 
 def save_batch_state(
@@ -93,14 +95,35 @@ def mark_batch_done(state: dict) -> None:
     )
 
 
+# 各深度单只股票预估耗时（分钟），与 auto_analyze_and_recommend.PER_TASK_MINUTES
+# 保持同一口径（batch_state 不反向依赖批量模块，避免循环导入）
+PER_TASK_MINUTES = {"quick": 7, "standard": 25, "deep": 50}
+
+
+def estimate_remaining_minutes(state: dict) -> int:
+    """估算续跑还需多少分钟：未完成股票数 / 并发数 × 单只耗时。
+
+    已 completed 的任务续跑时直接复用，不计入耗时；task_id 为空或
+    非 completed 的都要重跑。这里不查库（纯函数便于测试），保守假设
+    快照中所有股票都要重跑——高估无害（放弃续跑），低估会白跑。
+    """
+    from app.config import MAX_CONCURRENT_TASKS
+
+    per_task = PER_TASK_MINUTES.get(state.get("depth"), 25)
+    count = len(state.get("stocks") or [])
+    import math
+    return math.ceil(count / max(1, MAX_CONCURRENT_TASKS)) * per_task
+
+
 def is_batch_resumable(state: Optional[dict], now=None) -> bool:
     """纯函数：判断批次状态是否值得续跑。
 
     条件：
     - 状态存在且 status == running（done 表示已正常收尾）
     - stocks 非空
-    - 目标日期未过：target_date > 今天，或 == 今天且未到 15 点
-      （目标日收盘临近后推荐已失去时效，放弃续跑等下一批）
+    - 时效：现在 + 预估剩余耗时 ≤ 目标日开盘时间（9:30）。
+      推荐是给开盘用的，开盘前跑不完就没有续跑价值——
+      例如 9:40 重启、目标日今天，直接放弃，等 15:10 下一批。
     """
     if not state or state.get("status") != "running":
         return False
@@ -108,10 +131,17 @@ def is_batch_resumable(state: Optional[dict], now=None) -> bool:
         return False
 
     target_date = state.get("target_date") or ""
+    try:
+        target = datetime.strptime(target_date, "%Y-%m-%d")
+    except ValueError:
+        return False  # 目标日期缺失/格式错误，无法判断时效，放弃续跑
+
     now = now or now_cn()
-    today = now.strftime("%Y-%m-%d")
-    if target_date > today:
-        return True
-    if target_date == today and now.hour < BATCH_RESUME_CUTOFF_HOUR:
-        return True
-    return False
+    open_dt = target.replace(hour=MARKET_OPEN_HOUR, minute=MARKET_OPEN_MINUTE)
+    # naive/aware 对齐：now_cn 带时区，测试传入的 datetime 可能不带
+    if getattr(now, "tzinfo", None) is not None:
+        open_dt = open_dt.replace(tzinfo=now.tzinfo)
+
+    from datetime import timedelta
+    finish_estimate = now + timedelta(minutes=estimate_remaining_minutes(state))
+    return finish_estimate <= open_dt

@@ -179,6 +179,65 @@ async def after_market_analysis_job():
     print(f"\n{'='*70}\n")
 
 
+def _diagnose_no_recommendation(today: str) -> str:
+    """当日推荐为空时诊断具体原因，返回给用户看的白话说明。
+
+    区分四种情况（按诊断优先级）：
+    1. 批次跑完但无一入选 → 筛选太严/全是高风险，属正常结果
+    2. 批次被中断且已无法在开盘前补完 → 服务重启导致
+    3. 有分析任务但全部失败 → 数据源/环境故障
+    4. 什么都没有 → 昨日收盘分析根本没启动（服务未运行）
+    """
+    from app.batch_state import load_batch_state, is_batch_resumable
+    from app.database import SessionLocal, AnalysisTask
+
+    state = load_batch_state()
+
+    # 情况 1/2：有批次快照且目标日就是今天
+    if state and state.get("target_date") == today:
+        if state.get("status") == "done":
+            return ("昨日分析已正常完成，但没有股票通过筛选"
+                    "（评分不足或均被判定为高风险），今日暂无推荐。")
+        if state.get("status") == "running" and not is_batch_resumable(state):
+            done_count = 0
+            task_ids = [s.get("task_id") for s in state.get("stocks", []) if s.get("task_id")]
+            if task_ids:
+                db = SessionLocal()
+                try:
+                    done_count = db.query(AnalysisTask).filter(
+                        AnalysisTask.task_id.in_(task_ids),
+                        AnalysisTask.status == "completed",
+                    ).count()
+                finally:
+                    db.close()
+            total = len(state.get("stocks", []))
+            return (f"昨日批量分析中途被中断（完成 {done_count}/{total} 只），"
+                    f"且剩余分析已无法在开盘前补完，今日暂无推荐。"
+                    f"下一批分析将于今日收盘后自动启动。")
+
+    # 情况 3/4：看昨日 20 小时内是否创建过系统分析任务
+    db = SessionLocal()
+    try:
+        since = now_cn() - timedelta(hours=20)
+        recent = db.query(AnalysisTask).filter(
+            AnalysisTask.created_at >= since,
+            AnalysisTask.owner_user_id.is_(None),  # 系统批量任务（手动分析有归属）
+        ).all()
+    finally:
+        db.close()
+
+    if not recent:
+        return ("昨日收盘后未执行批量分析（服务可能未运行），今日暂无推荐。"
+                "下一批分析将于今日收盘后自动启动。")
+
+    failed = sum(1 for t in recent if t.status == "failed")
+    if failed == len(recent):
+        return (f"昨日批量分析已执行但 {failed} 只全部失败"
+                f"（可能是数据源不可用或分析超时），今日暂无推荐。请检查服务日志。")
+
+    return "分析可能仍在进行中或未生成有效结果，今日暂无推荐。"
+
+
 def _build_today_digest() -> tuple:
     """查询当日推荐并格式化为推送摘要，返回 (标题, 正文, 推荐条数)"""
     from app.database import SessionLocal, DailyRecommendation, AnalysisTask
@@ -210,7 +269,12 @@ def _build_today_digest() -> tuple:
 
     title = f"📈 {today} 早盘股票推荐（{len(rec_dicts)} 只）" if rec_dicts \
         else f"📈 {today} 早盘推荐（暂无数据）"
-    content = notifier.format_daily_digest(today, rec_dicts)
+    if rec_dicts:
+        content = notifier.format_daily_digest(today, rec_dicts)
+    else:
+        # 无推荐时诊断具体原因，替代笼统的"分析可能未完成"
+        reason = _diagnose_no_recommendation(today)
+        content = f"**{today}** 暂无推荐\n\n{reason}"
     return title, content, len(rec_dicts)
 
 
@@ -417,8 +481,9 @@ def start_scheduler():
     # ─── 断点续跑：上次批量分析被重启打断时优先恢复 ───
     # 与下方"错过补跑"互斥：续跑本身会走完整个推荐流程，
     # 再补跑 after_market_analysis 会重复拉起一整批分析。
-    from app.batch_state import load_batch_state, is_batch_resumable
-    batch_resumable = is_batch_resumable(load_batch_state())
+    from app.batch_state import load_batch_state, is_batch_resumable, estimate_remaining_minutes
+    _batch_state = load_batch_state()
+    batch_resumable = is_batch_resumable(_batch_state)
     if batch_resumable:
         scheduler.add_job(
             resume_batch_job,
@@ -428,7 +493,12 @@ def start_scheduler():
             name="断点续跑批量分析",
             replace_existing=True,
         )
-        print("   ♻️  检测到未完成的批量分析，60 秒后断点续跑")
+        print(f"   ♻️  检测到未完成的批量分析（预估还需 "
+              f"{estimate_remaining_minutes(_batch_state)} 分钟），60 秒后断点续跑")
+    elif _batch_state and _batch_state.get("status") == "running":
+        # 有未完成批次但放弃续跑：说明原因，避免"为什么没续跑"的排障困惑
+        print(f"   ⏭️  上次批量分析未完成，但预估无法在目标日 "
+              f"{_batch_state.get('target_date')} 开盘（9:30）前补完，放弃续跑（等下一批）")
 
     # ─── 错过补跑：今天已过触发点但从未尝试的任务，安排一次性执行 ───
     # 场景：15:10 后才重启服务（更新代码/宕机恢复），Cron 只会等明天，
