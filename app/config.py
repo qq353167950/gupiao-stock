@@ -136,7 +136,8 @@ DATABASE_URL = f"sqlite:///{DATA_DIR}/analyzer.db"
 REPORT_EXPIRE_HOURS = _env_int("REPORT_EXPIRE_HOURS", 24)  # 报告链接有效期（小时）
 
 # 并发与分析量配置
-MAX_CONCURRENT_TASKS = _env_int("MAX_CONCURRENT_TASKS", 2)  # 单进程最大并发分析数
+MAX_CONCURRENT_TASKS = _env_int("MAX_CONCURRENT_TASKS", 2)  # 批量分析（定时推荐）最大并发数
+MANUAL_CONCURRENT_TASKS = _env_int("MANUAL_CONCURRENT_TASKS", 2)  # Web 手动分析最大并发数（与批量通道独立）
 STOCKS_PER_SECTOR = _env_int("STOCKS_PER_SECTOR", 3)  # 每个大板块每日选股数（6 板块 × 3 = 18 只/天）
 
 # 分析深度配置

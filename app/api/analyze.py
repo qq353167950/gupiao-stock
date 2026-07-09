@@ -25,8 +25,8 @@ class AnalyzeResponse(BaseModel):
 async def start_analysis(request: AnalyzeRequest, user: User = Depends(require_user)):
     """开始分析股票（需登录——游客只读，防止分析资源被滥用）
 
-    统一走 create_task：与批量分析共享并发信号量，
-    手动请求同样受 MAX_CONCURRENT_TASKS 限流（超出并发的任务显示"排队中"）。
+    统一走 create_task：手动分析走独立的手动并发通道（MANUAL_CONCURRENT_TASKS），
+    与定时推荐批次（MAX_CONCURRENT_TASKS）互不排队；超出手动并发的任务显示"排队中"。
     """
     ticker = request.ticker.strip()
     if not ticker:

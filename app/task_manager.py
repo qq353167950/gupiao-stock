@@ -1,7 +1,7 @@
 """
 分析任务管理
-- 并发控制：模块级 asyncio.Semaphore 实施 MAX_CONCURRENT_TASKS，Web 手动分析与
-  批量分析共用同一进程内限流
+- 并发控制：批量分析（定时推荐，owner 为空）与 Web 手动分析（owner 非空）
+  使用相互独立的 asyncio.Semaphore 通道，互不排队——推荐批次跑满时用户仍可即时分析
 - 数据库写入：全部走短会话（_update_task），避免长事务导致 SQLite 锁竞争
 """
 import asyncio
@@ -11,21 +11,24 @@ import re
 import concurrent.futures
 from typing import Optional, Dict, Any
 
-from app.config import SKILL_REPORTS_DIR, MAX_CONCURRENT_TASKS, now_cn
+from app.config import SKILL_REPORTS_DIR, MAX_CONCURRENT_TASKS, MANUAL_CONCURRENT_TASKS, now_cn
+
 from app.database import SessionLocal, AnalysisTask
 from app.enhanced_analyzer import EnhancedAnalyzer
 
-# 并发限流：同一进程内最多 MAX_CONCURRENT_TASKS 个分析同时执行
+# 双通道并发限流：批量与手动各自独立排队，峰值总并发 = 两者之和
 # （Python 3.10+ 的 Semaphore 不再绑定创建时的事件循环，模块级创建安全）
-_analysis_semaphore = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
+_batch_semaphore = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
+_manual_semaphore = asyncio.Semaphore(MANUAL_CONCURRENT_TASKS)
 
 # 后台任务强引用，防止 asyncio.Task 被垃圾回收中途取消
 _background_tasks: set = set()
 
-# 分析子进程专用共享线程池：避免每个任务临时创建 executor，
-# 且 with 块退出时的 shutdown(wait=True) 在协程被取消时会同步阻塞事件循环
+# 分析子进程专用共享线程池：容量与两通道总并发一致，保证任一通道
+# 拿到信号量后立即有线程可用，不会跨通道互相占用
 _analysis_executor = concurrent.futures.ThreadPoolExecutor(
-    max_workers=MAX_CONCURRENT_TASKS, thread_name_prefix="analysis"
+    max_workers=MAX_CONCURRENT_TASKS + MANUAL_CONCURRENT_TASKS,
+    thread_name_prefix="analysis",
 )
 
 
@@ -78,15 +81,24 @@ def _get_task_field(task_id: str, field: str):
         db.close()
 
 
-async def run_analysis(task_id: str, ticker: str, depth: str = "standard"):
-    """运行股票分析任务（增强版：集成多维度分析，受并发信号量限流）"""
+async def run_analysis(task_id: str, ticker: str, depth: str = "standard",
+                       manual: bool = False):
+    """运行股票分析任务（增强版：集成多维度分析，按通道限流）。
+
+    Args:
+        manual: True 走手动通道（Web 用户发起），False 走批量通道（定时推荐）。
+            两通道信号量独立，互不排队。
+    """
     if _get_task_field(task_id, "status") is None:
         return
 
-    # 排队等待并发槽位
-    _update_task(task_id, status="pending", current_stage="排队中（等待并发槽位）")
+    semaphore = _manual_semaphore if manual else _batch_semaphore
+    channel_label = "手动" if manual else "批量"
 
-    async with _analysis_semaphore:
+    # 排队等待所属通道的并发槽位
+    _update_task(task_id, status="pending", current_stage=f"排队中（等待{channel_label}通道并发槽位）")
+
+    async with semaphore:
         try:
             _update_task(
                 task_id,
@@ -235,8 +247,9 @@ def create_task(ticker: str, depth: str = "standard", owner_user_id: int = None)
     """创建分析任务并调度执行。
 
     Args:
-        owner_user_id: 发起者用户 id。手动分析必填（历史记录按归属过滤）；
-            定时批量分析留空（系统任务，仅管理员可见）。
+        owner_user_id: 发起者用户 id。手动分析必填（历史记录按归属过滤，
+            并走独立的手动并发通道）；定时批量分析留空（系统任务，仅管理员
+            可见，走批量并发通道）。
 
     必须在运行中的事件循环内调用（FastAPI 处理器 / asyncio.run 上下文）。
     """
@@ -257,9 +270,12 @@ def create_task(ticker: str, depth: str = "standard", owner_user_id: int = None)
     finally:
         db.close()
 
-    # 在当前事件循环中调度分析（信号量控制实际并发）
+    # 在当前事件循环中调度分析；owner 非空 = 用户手动发起 → 手动通道
     loop = asyncio.get_running_loop()
-    bg_task = loop.create_task(run_analysis(task_id, parsed_ticker or ticker, depth))
+    bg_task = loop.create_task(run_analysis(
+        task_id, parsed_ticker or ticker, depth,
+        manual=owner_user_id is not None,
+    ))
     # 强引用防止 GC，完成后自动移除
     _background_tasks.add(bg_task)
     bg_task.add_done_callback(_background_tasks.discard)

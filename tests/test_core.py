@@ -104,10 +104,39 @@ def test_parse_ticker():
 
 
 def test_semaphore_matches_config():
-    """并发信号量必须真实生效且与配置一致"""
-    from app.task_manager import _analysis_semaphore
-    from app.config import MAX_CONCURRENT_TASKS
-    assert _analysis_semaphore._value == MAX_CONCURRENT_TASKS
+    """双通道并发信号量必须真实生效且与配置一致"""
+    from app.task_manager import _batch_semaphore, _manual_semaphore, _analysis_executor
+    from app.config import MAX_CONCURRENT_TASKS, MANUAL_CONCURRENT_TASKS
+    assert _batch_semaphore._value == MAX_CONCURRENT_TASKS
+    assert _manual_semaphore._value == MANUAL_CONCURRENT_TASKS
+    # 线程池容量必须覆盖两通道总并发，否则拿到信号量后仍会在池中排队
+    assert _analysis_executor._max_workers == MAX_CONCURRENT_TASKS + MANUAL_CONCURRENT_TASKS
+
+
+def test_manual_channel_independent_of_batch():
+    """批量通道占满时，手动通道仍可立即获取槽位（方案B核心行为）"""
+    import asyncio
+    from app import task_manager
+
+    async def scenario():
+        # 占满批量通道
+        acquired_batch = []
+        for _ in range(task_manager._batch_semaphore._value):
+            await task_manager._batch_semaphore.acquire()
+            acquired_batch.append(True)
+        assert task_manager._batch_semaphore.locked()
+
+        # 手动通道必须不受影响，立即可获取
+        try:
+            acquired = task_manager._manual_semaphore.locked() is False
+            assert acquired, "批量通道占满时手动通道不应被锁"
+            await asyncio.wait_for(task_manager._manual_semaphore.acquire(), timeout=1)
+            task_manager._manual_semaphore.release()
+        finally:
+            for _ in acquired_batch:
+                task_manager._batch_semaphore.release()
+
+    asyncio.run(scenario())
 
 
 def test_parse_analysis_summary_format():
