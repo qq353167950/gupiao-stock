@@ -26,8 +26,8 @@ from app.config import (
     PUBLIC_BASE_URL,
     now_cn,
 )
+from app.batch_state import save_batch_state, load_batch_state, mark_batch_done
 from app.database import SessionLocal, DailyRecommendation, AnalysisTask
-from app.market_data import get_sector_hot_stocks
 from app.task_manager import create_task
 from app.recommendation_engine import calculate_composite_score
 
@@ -227,79 +227,162 @@ def _generate_recommendations(
         db.close()
 
 
-async def auto_analyze_and_recommend(depth: str = "standard", recommendation_type: str = "morning"):
+async def auto_analyze_and_recommend(
+    depth: str = "standard",
+    recommendation_type: str = "morning",
+    resume_state: dict = None,
+):
     """
     自动分析并生成推荐
 
     Args:
         depth: 分析深度（quick/standard/deep）
         recommendation_type: 推荐类型（morning/noon）
+        resume_state: 断点续跑状态（app.batch_state.load_batch_state 的返回值）。
+            提供时跳过选股，复用状态中的股票清单：已 completed 的任务直接复用，
+            其余（重启僵尸/失败/丢失）重建任务，实现批次级断点续跑。
     """
     from app.stock_pool import get_major_sector
     from app import notifier
 
+    resuming = bool(resume_state)
+    if resuming:
+        # 续跑沿用原批次的深度与推荐类型，保证任务口径一致
+        depth = resume_state.get("depth") or depth
+        recommendation_type = resume_state.get("recommendation_type") or recommendation_type
+
     print(f"\n{'='*70}")
-    print(f"🔥 开始{'早盘' if recommendation_type == 'morning' else '午盘'}推荐流程")
+    print(f"🔥 {'♻️ 断点续跑' if resuming else '开始'}"
+          f"{'早盘' if recommendation_type == 'morning' else '午盘'}推荐流程")
     print(f"   时间: {now_cn().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"   深度: {depth} | 每板块选股: {STOCKS_PER_SECTOR}")
     print(f"{'='*70}\n")
 
-    # 1. 获取热门股票（同步 requests 逐批抓取耗时数十秒，放线程池避免阻塞事件循环）
-    print("📊 步骤1：获取市场热门股票...")
     loop = asyncio.get_running_loop()
-    sector_stocks = await loop.run_in_executor(
-        None, lambda: get_sector_hot_stocks(top_n_per_major_sector=STOCKS_PER_SECTOR)
-    )
 
-    if not sector_stocks:
-        print("⚠️  未能选出热门股票，流程终止")
-        return
+    if resuming:
+        # 续跑：跳过选股，直接复用状态中的股票清单
+        print("📊 步骤1：断点续跑，复用上次批次的股票清单...")
+        flat_stocks = [
+            s for s in resume_state["stocks"]
+            if isinstance(s, dict) and s.get("ticker")
+        ]
+        target_date = resume_state.get("target_date") or _determine_target_date()
+        print(f"✓ 恢复 {len(flat_stocks)} 只股票（目标日期 {target_date}）\n")
+    else:
+        # 1. 获取热门股票（同步 requests 逐批抓取耗时数十秒，放线程池避免阻塞事件循环）
+        # 惰性导入：market_data 依赖 pandas，续跑路径与测试环境无需加载
+        from app.market_data import get_sector_hot_stocks
 
-    total = sum(len(stocks) for stocks in sector_stocks.values())
-    print(f"✓ 选出 {len(sector_stocks)} 个大板块，共 {total} 只热门股票\n")
+        print("📊 步骤1：获取市场热门股票...")
+        sector_stocks = await loop.run_in_executor(
+            None, lambda: get_sector_hot_stocks(top_n_per_major_sector=STOCKS_PER_SECTOR)
+        )
 
-    # 2. 创建分析任务（跨板块去重：同一股票只分析一次）
-    print("🔍 步骤2：创建分析任务...")
+        if not sector_stocks:
+            print("⚠️  未能选出热门股票，流程终止")
+            return
 
-    analysis_tasks = []
-    seen_tickers = set()
-    for sector, stocks in sector_stocks.items():
-        print(f"\n【{sector}】")
-        for stock in stocks:
-            if stock['ticker'] in seen_tickers:
-                print(f"  - {stock['name']} ({stock['ticker']}) 已在其他板块创建，跳过")
-                continue
-            try:
-                task_id = create_task(stock['ticker'], depth=depth)
-                seen_tickers.add(stock['ticker'])
-                analysis_tasks.append({
-                    'task_id': task_id,
-                    'sector': sector,
+        total = sum(len(stocks) for stocks in sector_stocks.values())
+        print(f"✓ 选出 {len(sector_stocks)} 个大板块，共 {total} 只热门股票\n")
+
+        # 扁平化 + 跨板块去重（同一股票只分析一次），并预估推荐目标日期
+        flat_stocks = []
+        seen = set()
+        for sector, stocks in sector_stocks.items():
+            for stock in stocks:
+                if stock['ticker'] in seen:
+                    continue
+                seen.add(stock['ticker'])
+                flat_stocks.append({
                     'ticker': stock['ticker'],
                     'name': stock['name'],
+                    'sector': sector,
+                    'task_id': None,
                 })
-                print(f"  ✓ {stock['name']} ({stock['ticker']}) - 任务ID: {task_id}")
-            except Exception as e:
-                print(f"  ✗ {stock['name']} 创建任务失败: {e}")
+        target_date = _determine_target_date()
+
+    # 2. 创建分析任务（续跑时：已 completed 的任务直接复用，其余重建）
+    print("🔍 步骤2：创建分析任务...")
+
+    # 续跑时批量查询原任务状态，已完成的直接复用（不重新排队）
+    reusable: Dict[str, str] = {}  # task_id -> status
+    if resuming:
+        old_ids = [s['task_id'] for s in flat_stocks if s.get('task_id')]
+        if old_ids:
+            db = SessionLocal()
+            try:
+                rows = db.query(AnalysisTask.task_id, AnalysisTask.status).filter(
+                    AnalysisTask.task_id.in_(old_ids)
+                ).all()
+                reusable = {tid: status for tid, status in rows}
+            finally:
+                db.close()
+
+    analysis_tasks = []
+    pending_task_ids = []  # 本次真正需要等待的任务（不含复用的已完成任务）
+    for stock in flat_stocks:
+        old_id = stock.get('task_id')
+        if old_id and reusable.get(old_id) == "completed":
+            stock_entry = {
+                'task_id': old_id,
+                'sector': stock.get('sector', ''),
+                'ticker': stock['ticker'],
+                'name': stock.get('name', stock['ticker']),
+            }
+            analysis_tasks.append(stock_entry)
+            print(f"  ♻️ {stock_entry['name']} ({stock['ticker']}) 已完成，复用任务 {old_id}")
+            continue
+        try:
+            task_id = create_task(stock['ticker'], depth=depth)
+            stock['task_id'] = task_id  # 回写清单，供落盘后续跑使用
+            analysis_tasks.append({
+                'task_id': task_id,
+                'sector': stock.get('sector', ''),
+                'ticker': stock['ticker'],
+                'name': stock.get('name', stock['ticker']),
+            })
+            pending_task_ids.append(task_id)
+            print(f"  ✓ {stock.get('name', stock['ticker'])} ({stock['ticker']}) - 任务ID: {task_id}")
+        except Exception as e:
+            print(f"  ✗ {stock.get('name', stock['ticker'])} 创建任务失败: {e}")
 
     if not analysis_tasks:
         print("⚠️  没有成功创建任何分析任务，流程终止")
         return
 
-    print(f"\n✓ 共创建 {len(analysis_tasks)} 个分析任务")
+    reused = len(analysis_tasks) - len(pending_task_ids)
+    print(f"\n✓ 共 {len(analysis_tasks)} 个分析任务"
+          f"（新建 {len(pending_task_ids)}，复用已完成 {reused}）")
 
-    # 3. 等待分析完成
+    # 落盘批次状态：重启后 scheduler 据此断点续跑
+    save_batch_state(
+        target_date=target_date,
+        recommendation_type=recommendation_type,
+        depth=depth,
+        stocks=flat_stocks,
+    )
+
+    # 3. 等待分析完成（只等本次新建的任务）
     print(f"\n⏳ 步骤3：等待分析完成...")
-    stats = await _wait_for_tasks([t['task_id'] for t in analysis_tasks], depth)
+    stats = await _wait_for_tasks(pending_task_ids, depth)
+    stats["completed"] += reused  # 汇总口径包含复用的已完成任务
 
     # 4. 生成推荐（按细分板块）
     print(f"\n📋 步骤4：生成推荐（按细分板块）...")
-    target_date = _determine_target_date()
     print(f"   推荐目标日期：{target_date}")
 
     sub_sector_recommendations = _generate_recommendations(
         analysis_tasks, target_date, recommendation_type
     )
+
+    # 推荐已写库，批次核心目标达成 → 标记 done（后续推送失败不应触发整批重跑）
+    mark_batch_done(load_batch_state() or {
+        "target_date": target_date,
+        "recommendation_type": recommendation_type,
+        "depth": depth,
+        "stocks": flat_stocks,
+    })
 
     # 5. 输出结果
     print(f"\n{'='*70}")

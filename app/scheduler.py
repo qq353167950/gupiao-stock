@@ -340,6 +340,37 @@ async def cleanup_job():
     print(f"\n{'='*70}\n")
 
 
+async def resume_batch_job():
+    """断点续跑：重启后恢复上次未完成的批量分析。
+
+    场景：批量分析进行中服务重启（更新代码/宕机/OOM），僵尸任务已被
+    recover_zombie_tasks 标 failed，但批次快照（data/.batch-state.json）
+    仍是 running——据此复用已完成任务、重建未完成任务，继续走完推荐流程。
+    """
+    from app.batch_state import load_batch_state, is_batch_resumable
+    from auto_analyze_and_recommend import auto_analyze_and_recommend
+
+    state = load_batch_state()
+    if not is_batch_resumable(state):
+        return
+
+    print(f"\n{'='*70}")
+    print(f"♻️  断点续跑批量分析 - {now_cn().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"   目标日期: {state.get('target_date')} | 深度: {state.get('depth')}")
+    print(f"{'='*70}\n")
+
+    try:
+        await auto_analyze_and_recommend(
+            depth=state.get("depth") or DAILY_ANALYSIS_DEPTH,
+            recommendation_type=state.get("recommendation_type") or "morning",
+            resume_state=state,
+        )
+    except Exception as e:
+        print(f"❌ 断点续跑失败: {e}")
+        import traceback
+        traceback.print_exc()
+
+
 def start_scheduler():
     """启动调度器（时间由环境变量配置）"""
     analysis_h, analysis_m = parse_hhmm(AFTER_MARKET_ANALYSIS_TIME, "15:10")
@@ -383,6 +414,22 @@ def start_scheduler():
     print(f"   - 磁盘清理：  每天 {cleanup_h:02d}:{cleanup_m:02d}")
     print("   - 自动跳过休市日")
 
+    # ─── 断点续跑：上次批量分析被重启打断时优先恢复 ───
+    # 与下方"错过补跑"互斥：续跑本身会走完整个推荐流程，
+    # 再补跑 after_market_analysis 会重复拉起一整批分析。
+    from app.batch_state import load_batch_state, is_batch_resumable
+    batch_resumable = is_batch_resumable(load_batch_state())
+    if batch_resumable:
+        scheduler.add_job(
+            resume_batch_job,
+            trigger="date",
+            run_date=now_cn() + timedelta(seconds=60),
+            id="resume_batch",
+            name="断点续跑批量分析",
+            replace_existing=True,
+        )
+        print("   ♻️  检测到未完成的批量分析，60 秒后断点续跑")
+
     # ─── 错过补跑：今天已过触发点但从未尝试的任务，安排一次性执行 ───
     # 场景：15:10 后才重启服务（更新代码/宕机恢复），Cron 只会等明天，
     # 当天的收盘分析会静默丢失。延迟 60 秒执行，让应用完全就绪（skill 检查等）。
@@ -392,6 +439,8 @@ def start_scheduler():
         "morning_push": morning_push_job,
     }
     missed = _catchup_decisions(_read_sched_state(), now_cn())
+    if batch_resumable and "after_market_analysis" in missed:
+        missed.remove("after_market_analysis")  # 续跑已覆盖，避免双批
     for job_id in missed:
         run_at = now_cn() + timedelta(seconds=60)
         scheduler.add_job(
