@@ -44,7 +44,7 @@
         {% if not request.state.user %}
         <!-- 游客提示：推荐列表可浏览，发起分析/查看报告需登录 -->
         <div class="mb-6 p-4 bg-purple-50 border border-purple-100 rounded-xl flex items-center justify-between">
-            <p class="text-sm text-purple-700">🔒 游客可浏览推荐列表；点击股票发起分析、查看详情报告需要登录</p>
+            <p class="text-sm text-purple-700">🔒 点击股票发起分析、查看详情报告需要登录</p>
             <a href="/login?next=/recommendations" class="text-sm font-medium text-purple-600 hover:text-purple-800 whitespace-nowrap ml-4">前往登录 →</a>
         </div>
         {% endif %}

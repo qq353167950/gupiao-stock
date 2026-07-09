@@ -449,6 +449,42 @@ def test_password_hash_roundtrip():
     assert verify_password("x", "md5:1:ab:cd") is False
 
 
+def test_user_to_dict_password_visibility():
+    """用户序列化：默认不含密码；管理员列表场景显式开启才返回明文"""
+    from app.database import User
+
+    user = User(id=5, username="u", password_hash="x",
+                password_plain="secret-123", is_admin=False)
+    assert "password" not in user.to_dict()  # 默认（如登录态接口）绝不带密码
+    assert user.to_dict(include_password=True)["password"] == "secret-123"
+
+    # 历史账号明文列为空 → 返回 None（前端显示"未记录"提示）
+    legacy = User(id=6, username="old", password_hash="x", is_admin=False)
+    assert legacy.to_dict(include_password=True)["password"] is None
+
+
+def test_admin_users_page_has_password_toggle():
+    """用户管理页必须包含密码显示开关且默认隐藏"""
+    from app.main import templates
+    body = templates.TemplateResponse(
+        _make_request("/admin/users"), "admin_users.html").body.decode("utf-8")
+    assert "showPasswords" in body, "缺少密码显示开关状态"
+    assert "showPasswords: false" in body, "密码开关必须默认隐藏"
+    assert "显示密码" in body, "缺少开关文案"
+
+
+def test_guest_hint_text_removed():
+    """回归：游客提示文案中不得再出现「游客可浏览」前缀"""
+    from app.main import templates
+    for name, path in [
+        ("index.html", "/"),
+        ("login.html", "/login"),
+        ("recommendations.html", "/recommendations"),
+    ]:
+        body = templates.TemplateResponse(_make_request(path), name).body.decode("utf-8")
+        assert "游客可浏览" not in body, f"{name} 仍包含「游客可浏览」文案"
+
+
 def test_ensure_admin_user_idempotent():
     """内置管理员创建幂等：重复调用不重复建号，且不覆盖已改密码"""
     from app.auth import ensure_admin_user, verify_password, hash_password

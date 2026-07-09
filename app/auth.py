@@ -64,6 +64,7 @@ def ensure_admin_user():
         db.add(User(
             username=ADMIN_USERNAME,
             password_hash=hash_password(ADMIN_PASSWORD),
+            password_plain=ADMIN_PASSWORD,
             is_admin=True,
         ))
         db.commit()

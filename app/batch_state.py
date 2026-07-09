@@ -8,9 +8,9 @@ recover_zombie_tasks 标 failed，但"这批要分析哪些股票、哪些已完
 
 本模块把批次快照写入 data/.batch-state.json：
 - 批次启动选股完成后写入（stocks + task_ids + target_date）
-- 全流程成功结束后标记 done
-- 重启后若状态仍有效（is_batch_resumable），批次流程复用已完成任务、
-  只重建未完成的任务，实现断点续跑
+- 全流程成功结束后标记 done；时效丢失（开盘前补不完）标记 abandoned
+- 重启后由 decide_resume_action 统一决策：立即续跑 / 延后到 15:00 后 /
+  去除批次等新一轮——续跑时复用已完成任务、只重建未完成的任务
 
 单文件单批次：收盘后分析每天最多一批，后一批直接覆盖前一批。
 """
@@ -24,10 +24,15 @@ from app.config import DATA_DIR, now_cn
 
 BATCH_STATE_FILE = DATA_DIR / ".batch-state.json"
 
-# 推荐时效截止：目标日开盘时间（北京时间 9:30）。
-# 续跑必须在开盘前跑完才有意义——开盘后早盘推荐已失去时效。
+# 推荐时效截止：目标日开盘前（北京时间 9:00）。
+# 9:00 起进入交易时段窗口（9:00-15:00 不启动续跑），推荐必须在此之前就绪；
+# 预估跑不完就整批去除（abandoned），等当天 15:10 的新一轮分析。
 MARKET_OPEN_HOUR = 9
-MARKET_OPEN_MINUTE = 30
+MARKET_OPEN_MINUTE = 0
+
+# 交易时段窗口（北京时间 9:00-15:00）：该时段内不启动批量续跑
+MARKET_SESSION_START_HOUR = 9
+MARKET_SESSION_END_HOUR = 15
 
 
 def save_batch_state(
@@ -95,6 +100,21 @@ def mark_batch_done(state: dict) -> None:
     )
 
 
+def mark_batch_abandoned(state: dict) -> None:
+    """批次去除标记 abandoned：预估开盘前补不完/已开盘，续跑失去时效。
+
+    去除后该批次彻底出局（重启不再评估），等当天 15:10 收盘分析开新一轮；
+    保留文件供 _diagnose_no_recommendation 解释"今天为什么没推荐"。
+    """
+    save_batch_state(
+        target_date=state.get("target_date", ""),
+        recommendation_type=state.get("recommendation_type", ""),
+        depth=state.get("depth", ""),
+        stocks=state.get("stocks", []),
+        status="abandoned",
+    )
+
+
 # 各深度单只股票预估耗时（分钟），与 auto_analyze_and_recommend.PER_TASK_MINUTES
 # 保持同一口径（batch_state 不反向依赖批量模块，避免循环导入）
 PER_TASK_MINUTES = {"quick": 7, "standard": 25, "deep": 50}
@@ -115,33 +135,47 @@ def estimate_remaining_minutes(state: dict) -> int:
     return math.ceil(count / max(1, MAX_CONCURRENT_TASKS)) * per_task
 
 
-def is_batch_resumable(state: Optional[dict], now=None) -> bool:
-    """纯函数：判断批次状态是否值得续跑。
+def decide_resume_action(state: Optional[dict], now=None) -> str:
+    """纯函数：决定未完成批次的处置动作（启动决策与执行前二次评估共用）。
 
-    条件：
-    - 状态存在且 status == running（done 表示已正常收尾）
-    - stocks 非空
-    - 时效：现在 + 预估剩余耗时 ≤ 目标日开盘时间（9:30）。
-      推荐是给开盘用的，开盘前跑不完就没有续跑价值——
-      例如 9:40 重启、目标日今天，直接放弃，等 15:10 下一批。
+    返回四种动作：
+    - "resume"  立即续跑：时效充足且不在交易时段窗口
+    - "defer"   延后续跑：批次时效未过，但现在处于 9:00-15:00 窗口
+                （仅发生在目标日之前的休市日盘中重启，如周六上午续周一的批次），
+                调用方应安排到当天 15:00 后再续
+    - "abandon" 去除批次：预估无法在目标日开盘（9:00）前补完、目标日已过
+                或快照数据不可信——调用方应 mark_batch_abandoned 后等
+                当天 15:10 收盘分析开新一轮（绝不隔天续跑旧批次）
+    - "none"    无事可做：无快照 / 已 done / 已 abandoned / stocks 为空
+
+    判定顺序刻意先时效后窗口：目标日当天 9:00 后必然先命中时效不足
+    （deadline 即 9:00）判为 abandon，自然满足"今天不能还续跑昨天的批次"。
     """
     if not state or state.get("status") != "running":
-        return False
+        return "none"
     if not state.get("stocks"):
-        return False
+        return "none"
 
     target_date = state.get("target_date") or ""
     try:
         target = datetime.strptime(target_date, "%Y-%m-%d")
     except ValueError:
-        return False  # 目标日期缺失/格式错误，无法判断时效，放弃续跑
+        return "abandon"  # 目标日期缺失/格式错误，快照不可信，去除等新一轮
 
     now = now or now_cn()
-    open_dt = target.replace(hour=MARKET_OPEN_HOUR, minute=MARKET_OPEN_MINUTE)
-    # naive/aware 对齐：now_cn 带时区，测试传入的 datetime 可能不带
+    deadline = target.replace(hour=MARKET_OPEN_HOUR, minute=MARKET_OPEN_MINUTE)
+    # naive/aware 对齐：now_cn 带时区语义已剥离，测试传入的 datetime 可能带 tzinfo
     if getattr(now, "tzinfo", None) is not None:
-        open_dt = open_dt.replace(tzinfo=now.tzinfo)
+        deadline = deadline.replace(tzinfo=now.tzinfo)
 
     from datetime import timedelta
     finish_estimate = now + timedelta(minutes=estimate_remaining_minutes(state))
-    return finish_estimate <= open_dt
+    if finish_estimate > deadline:
+        return "abandon"
+
+    # 交易时段窗口（9:00-15:00）不启动续跑。走到这里时效必然充足，
+    # 意味着目标日在未来（目标日当天 9:00 后已被上面判为 abandon）
+    if MARKET_SESSION_START_HOUR <= now.hour < MARKET_SESSION_END_HOUR:
+        return "defer"
+
+    return "resume"

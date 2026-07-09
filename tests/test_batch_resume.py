@@ -62,22 +62,41 @@ def test_load_batch_state_missing_or_corrupt(tmp_path, monkeypatch):
 
 
 def test_mark_batch_done(tmp_path, monkeypatch):
-    """标记 done 后状态不再可续跑"""
+    """标记 done 后状态不再参与续跑决策"""
     from app import batch_state
     monkeypatch.setattr(batch_state, "BATCH_STATE_FILE", tmp_path / ".batch-state.json")
 
     stocks = [{"ticker": "000001.SZ", "name": "平安银行", "sector": "金融", "task_id": "t1"}]
     batch_state.save_batch_state("2099-01-01", "morning", "standard", stocks)
     state = batch_state.load_batch_state()
-    assert batch_state.is_batch_resumable(state) is True
+    assert batch_state.decide_resume_action(
+        state, datetime(2098, 12, 31, 20, 0)) == "resume"
 
     batch_state.mark_batch_done(state)
     state = batch_state.load_batch_state()
     assert state["status"] == "done"
-    assert batch_state.is_batch_resumable(state) is False
+    assert batch_state.decide_resume_action(
+        state, datetime(2098, 12, 31, 20, 0)) == "none"
 
 
-# ─── is_batch_resumable 纯函数判定 ───
+def test_mark_batch_abandoned(tmp_path, monkeypatch):
+    """去除批次：标记 abandoned 后彻底出局，不再续跑也不再评估"""
+    from app import batch_state
+    monkeypatch.setattr(batch_state, "BATCH_STATE_FILE", tmp_path / ".batch-state.json")
+
+    stocks = [{"ticker": "000001.SZ", "name": "平安银行", "sector": "金融", "task_id": "t1"}]
+    batch_state.save_batch_state("2099-01-01", "morning", "standard", stocks)
+    state = batch_state.load_batch_state()
+
+    batch_state.mark_batch_abandoned(state)
+    state = batch_state.load_batch_state()
+    assert state["status"] == "abandoned"
+    assert state["stocks"] == stocks  # 快照保留，供无推荐诊断解释原因
+    assert batch_state.decide_resume_action(
+        state, datetime(2098, 12, 31, 20, 0)) == "none"
+
+
+# ─── decide_resume_action 纯函数判定 ───
 
 def _make_state(target_date, status="running", stocks=None):
     return {
@@ -91,37 +110,65 @@ def _make_state(target_date, status="running", stocks=None):
     }
 
 
-def test_is_batch_resumable_time_window():
-    """时效判定：现在 + 预估耗时 ≤ 目标日 9:30 开盘才可续跑。
+def test_decide_resume_action_time_window():
+    """时效判定：现在 + 预估耗时 ≤ 目标日 9:00 才可续，超时去除（abandon）。
 
     standard 深度单只 25 分钟（默认并发 2）：1 只股票预估 25 分钟。
     """
-    from app.batch_state import is_batch_resumable
+    from app.batch_state import decide_resume_action
 
-    # 目标日前一天 15:30 中断重启（收盘分析刚启动就挂）→ 充裕，可续
-    assert is_batch_resumable(
-        _make_state("2026-07-10"), datetime(2026, 7, 9, 15, 30)) is True
+    # 目标日前一天 15:30 中断重启（收盘分析刚启动就挂）→ 充裕，立即续跑
+    assert decide_resume_action(
+        _make_state("2026-07-10"), datetime(2026, 7, 9, 15, 30)) == "resume"
 
-    # 目标日当天 8:00 → 8:25 完成 < 9:30 → 可续
-    assert is_batch_resumable(
-        _make_state("2026-07-10"), datetime(2026, 7, 10, 8, 0)) is True
+    # 目标日当天 8:00 → 8:25 完成 < 9:00 截止 → 可续
+    assert decide_resume_action(
+        _make_state("2026-07-10"), datetime(2026, 7, 10, 8, 0)) == "resume"
 
-    # 目标日当天 9:20 → 9:45 完成 > 9:30 开盘 → 放弃（哪怕只差几分钟）
-    assert is_batch_resumable(
-        _make_state("2026-07-10"), datetime(2026, 7, 10, 9, 20)) is False
+    # 目标日当天 8:50 → 9:15 完成 > 9:00 截止 → 去除（哪怕只差几分钟）
+    assert decide_resume_action(
+        _make_state("2026-07-10"), datetime(2026, 7, 10, 8, 50)) == "abandon"
 
-    # 目标日当天 9:40（已开盘）→ 放弃
-    assert is_batch_resumable(
-        _make_state("2026-07-10"), datetime(2026, 7, 10, 9, 40)) is False
+    # 目标日当天 9:40（已过开盘截止）→ 去除，不能今天还续跑昨天的批次
+    assert decide_resume_action(
+        _make_state("2026-07-10"), datetime(2026, 7, 10, 9, 40)) == "abandon"
 
-    # 目标日已过 → 放弃
-    assert is_batch_resumable(
-        _make_state("2026-07-09"), datetime(2026, 7, 10, 8, 0)) is False
+    # 目标日当天盘中 11:00 / 14:00 → 时效早已丢失，去除（而非 defer）
+    assert decide_resume_action(
+        _make_state("2026-07-10"), datetime(2026, 7, 10, 11, 0)) == "abandon"
+    assert decide_resume_action(
+        _make_state("2026-07-10"), datetime(2026, 7, 10, 14, 0)) == "abandon"
+
+    # 目标日已过 → 去除
+    assert decide_resume_action(
+        _make_state("2026-07-09"), datetime(2026, 7, 10, 8, 0)) == "abandon"
 
 
-def test_is_batch_resumable_scales_with_stock_count():
-    """股票越多预估耗时越长，同一时间点大批次可能不可续"""
-    from app.batch_state import is_batch_resumable
+def test_decide_resume_action_market_session_defers():
+    """9:00-15:00 时段不启动续跑：时效充足（目标日在未来）时顺延而非去除。
+
+    场景：周六上午重启，批次目标日是下周一 → 时效充足但处于交易时段窗口。
+    """
+    from app.batch_state import decide_resume_action
+
+    # 目标日 7-13（周一），7-11 周六 9:00/10:30/14:59 → defer（15:00 后再续）
+    assert decide_resume_action(
+        _make_state("2026-07-13"), datetime(2026, 7, 11, 9, 0)) == "defer"
+    assert decide_resume_action(
+        _make_state("2026-07-13"), datetime(2026, 7, 11, 10, 30)) == "defer"
+    assert decide_resume_action(
+        _make_state("2026-07-13"), datetime(2026, 7, 11, 14, 59)) == "defer"
+
+    # 同日 8:00（窗口前）与 15:00（窗口后）→ 正常续跑
+    assert decide_resume_action(
+        _make_state("2026-07-13"), datetime(2026, 7, 11, 8, 0)) == "resume"
+    assert decide_resume_action(
+        _make_state("2026-07-13"), datetime(2026, 7, 11, 15, 0)) == "resume"
+
+
+def test_decide_resume_action_scales_with_stock_count():
+    """股票越多预估耗时越长，同一时间点大批次可能被去除"""
+    from app.batch_state import decide_resume_action
     from app.config import MAX_CONCURRENT_TASKS
 
     # 20 只 standard：ceil(20/并发) × 25 分钟；并发 2 时 = 250 分钟
@@ -129,23 +176,24 @@ def test_is_batch_resumable_scales_with_stock_count():
         {"ticker": f"00000{i}.SZ", "name": f"股{i}", "sector": "测试", "task_id": None}
         for i in range(20)
     ])
-    # 目标日 6:00：仅剩 210 分钟，250 > 210 → 不可续（并发 ≤2 的默认配置下）
+    # 目标日 5:00：仅剩 240 分钟，250 > 240 → 去除（并发 ≤2 的默认配置下）
     if MAX_CONCURRENT_TASKS <= 2:
-        assert is_batch_resumable(big, datetime(2026, 7, 10, 6, 0)) is False
-    # 前一天 20:00：还有 13.5 小时 → 可续
-    assert is_batch_resumable(big, datetime(2026, 7, 9, 20, 0)) is True
+        assert decide_resume_action(big, datetime(2026, 7, 10, 5, 0)) == "abandon"
+    # 前一天 20:00：还有 13 小时 → 可续
+    assert decide_resume_action(big, datetime(2026, 7, 9, 20, 0)) == "resume"
 
 
-def test_is_batch_resumable_invalid_states():
-    """None/done/空 stocks/缺 target_date 均不可续"""
-    from app.batch_state import is_batch_resumable
+def test_decide_resume_action_invalid_states():
+    """None/done/abandoned/空 stocks → none；缺失或非法 target_date → abandon"""
+    from app.batch_state import decide_resume_action
 
     now = datetime(2026, 7, 10, 8, 0)
-    assert is_batch_resumable(None, now) is False
-    assert is_batch_resumable(_make_state("2026-07-11", status="done"), now) is False
-    assert is_batch_resumable(_make_state("2026-07-11", stocks=[]), now) is False
-    assert is_batch_resumable(_make_state(""), now) is False
-    assert is_batch_resumable(_make_state("not-a-date"), now) is False
+    assert decide_resume_action(None, now) == "none"
+    assert decide_resume_action(_make_state("2026-07-11", status="done"), now) == "none"
+    assert decide_resume_action(_make_state("2026-07-11", status="abandoned"), now) == "none"
+    assert decide_resume_action(_make_state("2026-07-11", stocks=[]), now) == "none"
+    assert decide_resume_action(_make_state(""), now) == "abandon"
+    assert decide_resume_action(_make_state("not-a-date"), now) == "abandon"
 
 
 # ─── 续跑复用已完成任务（数据库集成） ───
@@ -211,6 +259,32 @@ def test_resume_batch_job_noop_when_not_resumable(tmp_path, monkeypatch):
 
     asyncio.run(sched_mod.resume_batch_job())
     assert called == []
+
+
+def test_resume_batch_job_abandons_expired_batch(tmp_path, monkeypatch):
+    """时效已丢失的批次：resume_batch_job 去除批次（标 abandoned）且不启动分析"""
+    import asyncio
+    from app import batch_state
+    from app import scheduler as sched_mod
+    monkeypatch.setattr(batch_state, "BATCH_STATE_FILE", tmp_path / ".batch-state.json")
+
+    # 目标日已成过去 → 无论何时执行都判 abandon
+    batch_state.save_batch_state("2020-01-02", "morning", "standard", [
+        {"ticker": "000001.SZ", "name": "平安银行", "sector": "金融", "task_id": "t1"}
+    ])
+
+    called = []
+
+    async def fake_run(**kwargs):
+        called.append(kwargs)
+
+    import auto_analyze_and_recommend as aar
+    monkeypatch.setattr(aar, "auto_analyze_and_recommend", fake_run)
+
+    asyncio.run(sched_mod.resume_batch_job())
+    assert called == []  # 未启动批量分析
+    state = batch_state.load_batch_state()
+    assert state["status"] == "abandoned"  # 批次已去除，重启后不再评估
 
 
 # ─── 端到端模拟：批次中断 → 重启续跑 ───
@@ -283,7 +357,7 @@ def test_resume_end_to_end(tmp_path, monkeypatch):
         # 全流程结束后批次已标记 done，不会再次续跑
         state = batch_state.load_batch_state()
         assert state["status"] == "done"
-        assert batch_state.is_batch_resumable(state) is False
+        assert batch_state.decide_resume_action(state) == "none"
     finally:
         db = SessionLocal()
         try:
@@ -298,7 +372,7 @@ def test_resume_end_to_end(tmp_path, monkeypatch):
 # ─── 无推荐原因诊断 ───
 
 def test_diagnose_no_recommendation_variants(tmp_path, monkeypatch):
-    """无推荐时的推送文案必须区分：正常无入选 / 中断放弃 / 未执行"""
+    """无推荐时的推送文案必须区分：正常无入选 / 中断去除 / 未执行"""
     from app import batch_state
     from app import scheduler as sched_mod
     monkeypatch.setattr(batch_state, "BATCH_STATE_FILE", tmp_path / ".batch-state.json")
@@ -311,7 +385,14 @@ def test_diagnose_no_recommendation_variants(tmp_path, monkeypatch):
     ], status="done")
     assert "没有股票通过筛选" in sched_mod._diagnose_no_recommendation(today)
 
-    # 批次 running 且不可续（目标日已开盘）→ 中断说明
+    # 批次已被去除（abandoned）→ 中断说明
+    batch_state.save_batch_state(today, "morning", "standard", [
+        {"ticker": "000001.SZ", "name": "平安银行", "sector": "金融", "task_id": None}
+    ], status="abandoned")
+    msg = sched_mod._diagnose_no_recommendation(today)
+    assert "中断" in msg and "开盘前" in msg
+
+    # 批次 running 但时效已丢（今天 08:20 推送时点，目标日=今天且早已超时）→ 同样中断说明
     batch_state.save_batch_state(today, "morning", "standard", [
         {"ticker": "000001.SZ", "name": "平安银行", "sector": "金融", "task_id": None}
     ], status="running")

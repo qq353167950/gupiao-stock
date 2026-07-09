@@ -147,16 +147,23 @@ class User(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     username = Column(String(50), unique=True, nullable=False, index=True)
     password_hash = Column(String(200), nullable=False)  # pbkdf2:iterations:salt:hash
+    # 密码明文：管理员在用户管理页可直接查看各账号密码（页面带显示/隐藏开关）。
+    # 建号/改密时同步写入；历史账号（列后补）在下次登录成功时回填
+    password_plain = Column(String(200))
     is_admin = Column(Boolean, default=False)  # 管理员可创建/删除账号
     created_at = Column(DateTime, default=now_cn)
 
-    def to_dict(self):
-        return {
+    def to_dict(self, include_password: bool = False):
+        result = {
             "id": self.id,
             "username": self.username,
             "is_admin": self.is_admin,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
+        # 密码仅在管理员用户列表场景返回（列表接口本身已有 require_admin 门禁）
+        if include_password:
+            result["password"] = self.password_plain
+        return result
 
 
 # 创建数据库引擎
@@ -198,6 +205,9 @@ def _migrate_add_missing_columns():
         # (表, 列, 建列语句)：账号体系引入的任务归属列
         ("analysis_tasks", "owner_user_id",
          "ALTER TABLE analysis_tasks ADD COLUMN owner_user_id INTEGER"),
+        # 管理员用户管理页展示密码用的明文列（历史账号登录成功时回填）
+        ("users", "password_plain",
+         "ALTER TABLE users ADD COLUMN password_plain VARCHAR(200)"),
     ]
     with engine.connect() as conn:
         for table, column, ddl in migrations:

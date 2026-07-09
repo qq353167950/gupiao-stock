@@ -46,8 +46,20 @@
     <div class="glass rounded-3xl p-8">
         <div class="flex items-center justify-between mb-6">
             <h2 class="text-2xl font-bold text-gray-900">全部用户</h2>
-            <div class="px-4 py-2 bg-purple-50 rounded-full">
-                <span class="text-purple-600 font-semibold" x-text="users.length + ' 个账号'"></span>
+            <div class="flex items-center space-x-4">
+                <!-- 密码显示开关（默认隐藏，一键切换全部账号） -->
+                <label class="flex items-center space-x-2 cursor-pointer select-none">
+                    <span class="text-sm text-gray-600">显示密码</span>
+                    <div class="relative">
+                        <input type="checkbox" x-model="showPasswords" class="sr-only peer">
+                        <div class="w-11 h-6 bg-gray-200 rounded-full peer-checked:bg-purple-600 transition-colors"></div>
+                        <div class="absolute left-0.5 top-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform"
+                             :class="showPasswords ? 'translate-x-5' : ''"></div>
+                    </div>
+                </label>
+                <div class="px-4 py-2 bg-purple-50 rounded-full">
+                    <span class="text-purple-600 font-semibold" x-text="users.length + ' 个账号'"></span>
+                </div>
             </div>
         </div>
 
@@ -67,7 +79,15 @@
                                 <h4 class="font-semibold text-gray-900" x-text="u.username"></h4>
                                 <span x-show="u.is_admin" class="text-xs px-1.5 py-0.5 rounded bg-purple-100 text-purple-600">管理员</span>
                             </div>
-                            <p class="text-xs text-gray-400" x-text="'创建于 ' + formatDate(u.created_at)"></p>
+                            <div class="flex items-center space-x-3">
+                                <p class="text-xs text-gray-400" x-text="'创建于 ' + formatDate(u.created_at)"></p>
+                                <p class="text-xs font-mono">
+                                    <span class="text-gray-400">密码：</span><!--
+                                    历史账号明文列可能为空（该账号下次登录后自动补齐）
+                                    --><span class="text-gray-700"
+                                          x-text="showPasswords ? (u.password || '未记录（该账号登录一次后可见）') : '••••••'"></span>
+                                </p>
+                            </div>
                         </div>
                     </div>
                     <button @click="deleteUser(u)"
@@ -89,6 +109,7 @@
             users: [],
             loaded: false,
             creating: false,
+            showPasswords: false,  // 密码列显示开关，默认隐藏
             newUsername: '',
             newPassword: '',
             newIsAdmin: false,

@@ -184,11 +184,11 @@ def _diagnose_no_recommendation(today: str) -> str:
 
     区分四种情况（按诊断优先级）：
     1. 批次跑完但无一入选 → 筛选太严/全是高风险，属正常结果
-    2. 批次被中断且已无法在开盘前补完 → 服务重启导致
+    2. 批次被中断且已去除（开盘前补不完）→ 服务重启导致
     3. 有分析任务但全部失败 → 数据源/环境故障
     4. 什么都没有 → 昨日收盘分析根本没启动（服务未运行）
     """
-    from app.batch_state import load_batch_state, is_batch_resumable
+    from app.batch_state import load_batch_state, decide_resume_action
     from app.database import SessionLocal, AnalysisTask
 
     state = load_batch_state()
@@ -198,7 +198,10 @@ def _diagnose_no_recommendation(today: str) -> str:
         if state.get("status") == "done":
             return ("昨日分析已正常完成，但没有股票通过筛选"
                     "（评分不足或均被判定为高风险），今日暂无推荐。")
-        if state.get("status") == "running" and not is_batch_resumable(state):
+        # abandoned=启动时已判定去除；running+abandon=尚未来得及标记的同类情况
+        if (state.get("status") == "abandoned"
+                or (state.get("status") == "running"
+                    and decide_resume_action(state) == "abandon")):
             done_count = 0
             task_ids = [s.get("task_id") for s in state.get("stocks", []) if s.get("task_id")]
             if task_ids:
@@ -410,12 +413,41 @@ async def resume_batch_job():
     场景：批量分析进行中服务重启（更新代码/宕机/OOM），僵尸任务已被
     recover_zombie_tasks 标 failed，但批次快照（data/.batch-state.json）
     仍是 running——据此复用已完成任务、重建未完成任务，继续走完推荐流程。
+
+    执行前用 decide_resume_action 二次评估：从"安排续跑"到"真正执行"存在
+    延迟（启动 60 秒就绪期 / defer 等到 15:00 后），期间时效可能已经丢失
+    （如 8:59 安排、9:01 执行且预估撞上 9:00 截止），按最新决策处置。
     """
-    from app.batch_state import load_batch_state, is_batch_resumable
+    from app.batch_state import (
+        load_batch_state, decide_resume_action, mark_batch_abandoned,
+    )
     from auto_analyze_and_recommend import auto_analyze_and_recommend
 
     state = load_batch_state()
-    if not is_batch_resumable(state):
+    action = decide_resume_action(state)
+    if action == "abandon":
+        # 时效已丢失：去除批次，等当天 15:10 收盘分析开新一轮
+        mark_batch_abandoned(state)
+        print(f"🗑️  批次已去除：无法在目标日 {state.get('target_date')} 开盘（9:00）前补完，"
+              f"等待收盘后新一轮分析")
+        return
+    if action == "defer":
+        # 执行时刻落入 9:00-15:00 窗口（如 8:59 安排、9:00 后就绪）：顺延到 15:00 后
+        from app.batch_state import MARKET_SESSION_END_HOUR
+        run_at = now_cn().replace(
+            hour=MARKET_SESSION_END_HOUR, minute=0, second=30, microsecond=0
+        )
+        scheduler.add_job(
+            resume_batch_job,
+            trigger="date",
+            run_date=run_at,
+            id="resume_batch",
+            name="断点续跑批量分析（15:00 后）",
+            replace_existing=True,
+        )
+        print(f"⏸️  当前处于 9:00-15:00 时段，批量续跑顺延至 {run_at.strftime('%H:%M')}")
+        return
+    if action != "resume":
         return
 
     print(f"\n{'='*70}")
@@ -478,13 +510,16 @@ def start_scheduler():
     print(f"   - 磁盘清理：  每天 {cleanup_h:02d}:{cleanup_m:02d}")
     print("   - 自动跳过休市日")
 
-    # ─── 断点续跑：上次批量分析被重启打断时优先恢复 ───
+    # ─── 断点续跑：上次批量分析被重启打断时按最新决策处置 ───
     # 与下方"错过补跑"互斥：续跑本身会走完整个推荐流程，
     # 再补跑 after_market_analysis 会重复拉起一整批分析。
-    from app.batch_state import load_batch_state, is_batch_resumable, estimate_remaining_minutes
+    from app.batch_state import (
+        load_batch_state, decide_resume_action, estimate_remaining_minutes,
+        mark_batch_abandoned, MARKET_SESSION_END_HOUR,
+    )
     _batch_state = load_batch_state()
-    batch_resumable = is_batch_resumable(_batch_state)
-    if batch_resumable:
+    _resume_action = decide_resume_action(_batch_state)
+    if _resume_action == "resume":
         scheduler.add_job(
             resume_batch_job,
             trigger="date",
@@ -495,10 +530,29 @@ def start_scheduler():
         )
         print(f"   ♻️  检测到未完成的批量分析（预估还需 "
               f"{estimate_remaining_minutes(_batch_state)} 分钟），60 秒后断点续跑")
-    elif _batch_state and _batch_state.get("status") == "running":
-        # 有未完成批次但放弃续跑：说明原因，避免"为什么没续跑"的排障困惑
-        print(f"   ⏭️  上次批量分析未完成，但预估无法在目标日 "
-              f"{_batch_state.get('target_date')} 开盘（9:30）前补完，放弃续跑（等下一批）")
+    elif _resume_action == "defer":
+        # 9:00-15:00 时段不启动续跑：安排到当天 15:00 后再续。
+        # 走到这里说明目标日在未来（休市日盘中重启），时效由执行前二次评估把关
+        run_at = now_cn().replace(
+            hour=MARKET_SESSION_END_HOUR, minute=0, second=30, microsecond=0
+        )
+        scheduler.add_job(
+            resume_batch_job,
+            trigger="date",
+            run_date=run_at,
+            id="resume_batch",
+            name="断点续跑批量分析（15:00 后）",
+            replace_existing=True,
+        )
+        print(f"   ⏸️  检测到未完成的批量分析，当前处于 9:00-15:00 时段不启动，"
+              f"已安排 {run_at.strftime('%H:%M')} 续跑")
+    elif _resume_action == "abandon":
+        # 预估开盘（9:00）前补不完或目标日已过：整批去除，
+        # 等当天 15:10 收盘分析开新一轮——绝不隔天续跑旧批次
+        mark_batch_abandoned(_batch_state)
+        print(f"   🗑️  上次批量分析未完成且无法在目标日 "
+              f"{_batch_state.get('target_date')} 开盘（9:00）前补完，已去除该批次"
+              f"（等待收盘后新一轮分析）")
 
     # ─── 错过补跑：今天已过触发点但从未尝试的任务，安排一次性执行 ───
     # 场景：15:10 后才重启服务（更新代码/宕机恢复），Cron 只会等明天，
@@ -509,7 +563,7 @@ def start_scheduler():
         "morning_push": morning_push_job,
     }
     missed = _catchup_decisions(_read_sched_state(), now_cn())
-    if batch_resumable and "after_market_analysis" in missed:
+    if _resume_action in ("resume", "defer") and "after_market_analysis" in missed:
         missed.remove("after_market_analysis")  # 续跑已覆盖，避免双批
     for job_id in missed:
         run_at = now_cn() + timedelta(seconds=60)

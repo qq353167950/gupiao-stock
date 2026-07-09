@@ -64,6 +64,18 @@ async def login(request: Request, body: LoginRequest):
     if user is None or not verify_password(body.password, user.password_hash):
         raise HTTPException(status_code=401, detail="用户名或密码错误")
 
+    # 历史账号明文回填：password_plain 列后补，旧账号该列为空——
+    # 登录校验通过说明本次输入即真实密码，借机补齐供管理员页展示
+    if user.password_plain != body.password:
+        db = SessionLocal()
+        try:
+            target = db.query(User).filter(User.id == user.id).first()
+            if target is not None:
+                target.password_plain = body.password
+                db.commit()
+        finally:
+            db.close()
+
     request.session["user_id"] = user.id
     return _user_state(user)
 
@@ -95,6 +107,7 @@ async def change_password(body: ChangePasswordRequest, user: User = Depends(requ
         if target is None:
             raise HTTPException(status_code=404, detail="用户不存在")
         target.password_hash = hash_password(body.new_password)
+        target.password_plain = body.new_password  # 管理员页展示用明文同步更新
         db.commit()
     finally:
         db.close()
@@ -103,11 +116,11 @@ async def change_password(body: ChangePasswordRequest, user: User = Depends(requ
 
 @router.get("/auth/users")
 async def list_users(admin: User = Depends(require_admin)):
-    """用户列表（仅管理员）"""
+    """用户列表（仅管理员）——含各账号密码，页面提供显示/隐藏开关"""
     db = SessionLocal()
     try:
         users = db.query(User).order_by(User.created_at.asc()).all()
-        return {"users": [u.to_dict() for u in users]}
+        return {"users": [u.to_dict(include_password=True) for u in users]}
     finally:
         db.close()
 
@@ -128,6 +141,7 @@ async def create_user(body: CreateUserRequest, admin: User = Depends(require_adm
         user = User(
             username=username,
             password_hash=hash_password(body.password),
+            password_plain=body.password,  # 管理员页展示用明文
             is_admin=body.is_admin,
         )
         db.add(user)
