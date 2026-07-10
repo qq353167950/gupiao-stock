@@ -136,9 +136,17 @@ DATABASE_URL = f"sqlite:///{DATA_DIR}/analyzer.db"
 REPORT_EXPIRE_HOURS = _env_int("REPORT_EXPIRE_HOURS", 24)  # 报告链接有效期（小时）
 
 # 并发与分析量配置
-MAX_CONCURRENT_TASKS = _env_int("MAX_CONCURRENT_TASKS", 2)  # 批量分析（定时推荐）最大并发数
+MAX_CONCURRENT_TASKS = _env_int("MAX_CONCURRENT_TASKS", 3)  # 批量分析（定时推荐）最大并发数
 MANUAL_CONCURRENT_TASKS = _env_int("MANUAL_CONCURRENT_TASKS", 2)  # Web 手动分析最大并发数（与批量通道独立）
-STOCKS_PER_SECTOR = _env_int("STOCKS_PER_SECTOR", 3)  # 每个大板块每日选股数（6 板块 × 3 = 18 只/天）
+DAILY_ANALYSIS_TARGET_COUNT = _env_int("DAILY_ANALYSIS_TARGET_COUNT", 50)  # 每日批量分析目标股票数
+STOCKS_PER_SECTOR = _env_int("STOCKS_PER_SECTOR", 9)  # 兼容旧配置：每大板块候选数（6 × 9 ≈ 50）
+RECOMMENDATION_STYLE = os.getenv("RECOMMENDATION_STYLE", "short_mid").strip().lower()  # short/mid/short_mid/balanced
+RECOMMENDATION_RISK_APPETITE = os.getenv("RECOMMENDATION_RISK_APPETITE", "aggressive").strip().lower()  # conservative/balanced/aggressive
+SHORT_TERM_WEIGHT = _env_int("SHORT_TERM_WEIGHT", 70)  # 短线偏好权重
+MID_TERM_WEIGHT = _env_int("MID_TERM_WEIGHT", 30)  # 中线偏好权重
+STRONG_RECOMMEND_LIMIT = _env_int("STRONG_RECOMMEND_LIMIT", 5)  # 强推荐展示上限
+RECOMMEND_LIMIT = _env_int("RECOMMEND_LIMIT", 10)  # 推荐展示上限
+OBSERVE_LIMIT = _env_int("OBSERVE_LIMIT", 20)  # 观察展示上限
 
 # 分析深度配置
 # Web 端深度（quick/standard/deep）→ UZI-Skill run.py --depth（lite/medium/deep）

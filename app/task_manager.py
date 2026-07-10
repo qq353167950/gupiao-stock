@@ -56,6 +56,17 @@ def parse_ticker(input_str: str) -> Optional[str]:
     return input_str
 
 
+def format_stock_display_name(name: Optional[str], ticker: str) -> str:
+    """统一股票展示名：股票名称（股票号码）。"""
+    clean_name = (name or "").strip()
+    clean_ticker = (ticker or "").strip()
+    if not clean_name:
+        return clean_ticker
+    if clean_ticker and clean_ticker not in clean_name:
+        return f"{clean_name}（{clean_ticker}）"
+    return clean_name
+
+
 def _update_task(task_id: str, **fields) -> bool:
     """短会话更新任务字段，返回是否成功（任务不存在返回 False）"""
     db = SessionLocal()
@@ -243,13 +254,15 @@ def parse_analysis_summary(report_dir: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def create_task(ticker: str, depth: str = "standard", owner_user_id: int = None) -> str:
+def create_task(ticker: str, depth: str = "standard", owner_user_id: int = None,
+                name: str = None) -> str:
     """创建分析任务并调度执行。
 
     Args:
         owner_user_id: 发起者用户 id。手动分析必填（历史记录按归属过滤，
             并走独立的手动并发通道）；定时批量分析留空（系统任务，仅管理员
             可见，走批量并发通道）。
+        name: 股票名称。批量任务传入后用于列表与报告展示。
 
     必须在运行中的事件循环内调用（FastAPI 处理器 / asyncio.run 上下文）。
     """
@@ -261,6 +274,7 @@ def create_task(ticker: str, depth: str = "standard", owner_user_id: int = None)
         task = AnalysisTask(
             task_id=task_id,
             ticker=parsed_ticker or ticker,
+            name=format_stock_display_name(name, parsed_ticker or ticker) if name else None,
             depth=depth,
             status="pending",
             owner_user_id=owner_user_id,

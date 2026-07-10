@@ -38,9 +38,9 @@
 
 ```
 15:10 收盘后（交易日）
-  → 腾讯行情选股（每大板块 TOP N，默认 3 只 × 6 板块 = 18 只）
-  → 并发批量分析（默认并发 2，standard 深度约 25 分钟/只）
-  → 全部完成后生成次日推荐 + 立即推送分析摘要
+  → 三池选股（动量池 + 质量池 + 轮动池，每日默认约 50 只）
+  → 并发批量分析（默认并发 3，standard 深度约 25 分钟/只）
+  → 全部完成后按多因子模型生成次日推荐、数据完整度、未入选原因 + 立即推送分析摘要
 08:20 开盘前（交易日）
   → 推送当日推荐至所有已配置渠道
 03:30 每天
@@ -141,8 +141,16 @@ venv/bin/python auto_analyze_and_recommend.py quick morning
 
 | 环境变量 | 默认 | 说明 |
 |---|---|---|
-| `MAX_CONCURRENT_TASKS` | 2 | 并发分析数（每任务约占 300-500MB 内存）|
-| `STOCKS_PER_SECTOR` | 3 | 每大板块每日选股数（×6 板块）|
+| `MAX_CONCURRENT_TASKS` | 3 | 批量并发分析数（每任务约占 300-500MB 内存）|
+| `DAILY_ANALYSIS_TARGET_COUNT` | 50 | 每日批量分析目标股票数 |
+| `STOCKS_PER_SECTOR` | 9 | 兼容旧配置：每大板块候选数（×6 板块）|
+| `RECOMMENDATION_STYLE` | short_mid | 推荐风格：短中线 |
+| `SHORT_TERM_WEIGHT` | 70 | 短线权重 |
+| `MID_TERM_WEIGHT` | 30 | 中线权重 |
+| `RECOMMENDATION_RISK_APPETITE` | aggressive | 推荐结果偏积极 |
+| `STRONG_RECOMMEND_LIMIT` | 5 | 强推荐展示上限 |
+| `RECOMMEND_LIMIT` | 10 | 推荐展示上限 |
+| `OBSERVE_LIMIT` | 20 | 观察展示上限 |
 | `DAILY_ANALYSIS_DEPTH` | standard | 每日定时分析深度 quick/standard/deep |
 | `AFTER_MARKET_ANALYSIS_TIME` | 15:10 | 收盘分析时间 |
 | `MORNING_PUSH_TIME` | 08:20 | 早盘推送时间 |
@@ -169,7 +177,7 @@ venv/bin/python auto_analyze_and_recommend.py quick morning
 - **修改密码**：登录后点导航栏右上角**用户名**进入「账号设置」页（`/account`）
 - **开设账号**：管理员登录 → 导航「用户管理」→ 填用户名与初始密码创建，可勾选授予管理员
 - **前端拦截**：游客点击功能按钮直接提示登录（不发请求）；后端 API 同样校验（401/403），双层防护
-- **定时批量分析**产生的任务归属系统，仅管理员在历史记录中可见
+- **定时批量分析**产生的任务归属系统，不进入历史记录页；批次完成后会生成独立 HTML 汇总报告
 
 ## UZI-Skill 自动更新
 

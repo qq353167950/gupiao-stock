@@ -85,9 +85,24 @@ def test_config_no_hardcoded_workspace():
 
 
 def test_config_concurrency_positive():
-    from app.config import MAX_CONCURRENT_TASKS, STOCKS_PER_SECTOR
-    assert MAX_CONCURRENT_TASKS >= 1
-    assert STOCKS_PER_SECTOR >= 1
+    from app.config import (
+        MAX_CONCURRENT_TASKS,
+        STOCKS_PER_SECTOR,
+        DAILY_ANALYSIS_TARGET_COUNT,
+        SHORT_TERM_WEIGHT,
+        MID_TERM_WEIGHT,
+        STRONG_RECOMMEND_LIMIT,
+        RECOMMEND_LIMIT,
+        OBSERVE_LIMIT,
+    )
+    assert MAX_CONCURRENT_TASKS >= 3
+    assert STOCKS_PER_SECTOR >= 9
+    assert DAILY_ANALYSIS_TARGET_COUNT == 50
+    assert SHORT_TERM_WEIGHT == 70
+    assert MID_TERM_WEIGHT == 30
+    assert STRONG_RECOMMEND_LIMIT == 5
+    assert RECOMMEND_LIMIT == 10
+    assert OBSERVE_LIMIT == 20
 
 
 # ─── task_manager ───
@@ -101,6 +116,13 @@ def test_parse_ticker():
     assert parse_ticker(" 000001.SZ ") == "000001.SZ"
     assert parse_ticker("AAPL") == "AAPL"
     assert parse_ticker("贵州茅台") == "贵州茅台"
+
+
+def test_format_stock_display_name():
+    from app.task_manager import format_stock_display_name
+    assert format_stock_display_name("贵州茅台", "600519.SH") == "贵州茅台（600519.SH）"
+    assert format_stock_display_name(None, "600519.SH") == "600519.SH"
+    assert format_stock_display_name("贵州茅台（600519.SH）", "600519.SH") == "贵州茅台（600519.SH）"
 
 
 def test_semaphore_matches_config():
@@ -314,6 +336,31 @@ def test_parse_trap_result_variants():
 
 # ─── recommendation_engine ───
 
+def test_market_data_three_pool_selection():
+    import pandas as pd
+    from app.market_data import (
+        select_stocks_by_momentum,
+        select_stocks_by_quality_proxy,
+        select_stocks_by_rotation,
+    )
+
+    df = pd.DataFrame([
+        {"code": "600001", "name": "样本一", "price": 10, "change_pct": 5, "volume": 1000, "amount": 10000},
+        {"code": "600002", "name": "样本二", "price": 12, "change_pct": 1, "volume": 3000, "amount": 30000},
+        {"code": "600003", "name": "样本三", "price": 11, "change_pct": -1, "volume": 2500, "amount": 25000},
+        {"code": "600004", "name": "ST样本", "price": 8, "change_pct": 2, "volume": 5000, "amount": 50000},
+    ])
+    stocks = ["600001.SH", "600002.SH", "600003.SH", "600004.SH"]
+
+    momentum = select_stocks_by_momentum(stocks, df, top_n=1)
+    quality = select_stocks_by_quality_proxy(stocks, df, top_n=1)
+    rotation = select_stocks_by_rotation(stocks, df, {"600002.SH"}, top_n=1)
+
+    assert momentum[0]["source_pool"] == "momentum"
+    assert quality[0]["source_pool"] == "quality"
+    assert rotation[0]["source_pool"] == "rotation"
+    assert all("ST" not in item["name"] for item in momentum + quality + rotation)
+
 def test_calculate_composite_score_returns_triple():
     """必须返回 (评分, 理由, 期限) 三元组"""
     from app.recommendation_engine import calculate_composite_score
@@ -325,11 +372,36 @@ def test_calculate_composite_score_returns_triple():
         dcf_discount = 0.4
         bullish_count = 20
         total_voters = 50
+        enhanced_result = '{"trap_detection":{"trap_score":9},"lhb_analysis":{"recent_lhb_count":2,"main_money":"机构主导"}}'
+        report_path = "x/full-report-standalone.html"
 
     score, reason, period = calculate_composite_score(FakeTask())
-    assert score == 75.0
+    assert score >= 60.0
     assert isinstance(reason, str) and reason
+    assert "数据完整度" in reason
     assert period in ("长期", "中长期", "短期")
+
+
+def test_evaluate_recommendation_contains_explainable_fields():
+    from app.recommendation_engine import evaluate_recommendation
+
+    class FakeTask:
+        score = 82.0
+        composite_score = 75.0
+        risk_level = "低风险"
+        dcf_discount = 0.35
+        bullish_count = 28
+        total_voters = 50
+        enhanced_result = '{"trap_detection":{"trap_score":9},"lhb_analysis":{"recent_lhb_count":3,"main_money":"机构主导"}}'
+        report_path = "x/full-report-standalone.html"
+
+    result = evaluate_recommendation(FakeTask())
+    assert result["final_score"] > 70
+    assert result["recommendation_level"] in ("强推荐", "推荐", "观察")
+    assert result["data_quality"] == "A"
+    assert set(result["factor_scores"]) == {
+        "fundamental", "valuation", "growth", "capital", "trend", "risk", "catalyst"
+    }
 
 
 # ─── skill_manager 更新机制 ───

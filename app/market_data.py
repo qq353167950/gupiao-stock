@@ -4,7 +4,7 @@
 """
 import requests
 import pandas as pd
-from typing import List, Dict
+from typing import List, Dict, Set
 from datetime import datetime
 import time
 
@@ -119,6 +119,37 @@ def get_a_share_realtime_tencent() -> pd.DataFrame:
         return pd.DataFrame()
 
 
+def _with_market_suffix(code: str) -> str:
+    return f"{code}.SH" if code.startswith('6') else f"{code}.SZ"
+
+
+def _stock_row_to_dict(row, reason: str, source_pool: str) -> Dict:
+    code_with_market = _with_market_suffix(row['code'])
+    return {
+        'ticker': code_with_market,
+        'name': row['name'],
+        'price': float(row['price']),
+        'change_pct': float(row['change_pct']),
+        'volume': float(row['volume']),
+        'amount': float(row['amount']),
+        'source_pool': source_pool,
+        'selected_reason': reason,
+    }
+
+
+def _base_trade_filter(sector_stocks: List[str], df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return pd.DataFrame()
+    filtered = df[df['code'].isin([s.split('.')[0] for s in sector_stocks])].copy()
+    if filtered.empty:
+        return filtered
+    return filtered[
+        (filtered['price'] > 0) &
+        (filtered['amount'] > 0) &
+        (~filtered['name'].str.contains('ST', na=False))
+    ]
+
+
 def select_stocks_by_momentum(sector_stocks: List[str], df: pd.DataFrame, top_n: int = 3) -> List[Dict]:
     """
     基于涨跌幅和成交量选股
@@ -130,20 +161,14 @@ def select_stocks_by_momentum(sector_stocks: List[str], df: pd.DataFrame, top_n:
     4. 按涨跌幅排序
     """
     try:
-        if df.empty:
-            return []
-        
-        # 筛选指定板块的股票
-        df = df[df['code'].isin([s.split('.')[0] for s in sector_stocks])].copy()
+        df = _base_trade_filter(sector_stocks, df)
         
         if df.empty:
             return []
         
-        # 过滤条件
+        # 过滤条件：上涨但不过热，兼顾活跃度
         df = df[
-            (df['change_pct'] > 0) & (df['change_pct'] <= 10) &  # 上涨但不过度
-            (df['price'] > 0) &  # 有效价格
-            (~df['name'].str.contains('ST', na=False))  # 排除ST
+            (df['change_pct'] > 0) & (df['change_pct'] <= 10)
         ]
         
         if df.empty:
@@ -159,27 +184,14 @@ def select_stocks_by_momentum(sector_stocks: List[str], df: pd.DataFrame, top_n:
         # 按涨跌幅排序
         df = df.sort_values('change_pct', ascending=False).head(top_n)
         
-        # 返回结果
-        results = []
-        for _, row in df.iterrows():
-            # 添加市场后缀
-            code_with_market = row['code']
-            if code_with_market.startswith('6'):
-                code_with_market += '.SH'
-            else:
-                code_with_market += '.SZ'
-            
-            results.append({
-                'ticker': code_with_market,
-                'name': row['name'],
-                'price': float(row['price']),
-                'change_pct': float(row['change_pct']),
-                'volume': float(row['volume']),
-                'amount': float(row['amount']),
-                'selected_reason': f"涨幅{row['change_pct']:.2f}% · 成交{row['amount']:.0f}万"
-            })
-        
-        return results
+        return [
+            _stock_row_to_dict(
+                row,
+                f"动量池：涨幅{row['change_pct']:.2f}% · 成交{row['amount']:.0f}万",
+                "momentum",
+            )
+            for _, row in df.iterrows()
+        ]
         
     except Exception as e:
         print(f"选股失败: {e}")
@@ -188,12 +200,82 @@ def select_stocks_by_momentum(sector_stocks: List[str], df: pd.DataFrame, top_n:
         return []
 
 
-def get_sector_hot_stocks(top_n_per_major_sector: int = 20) -> Dict[str, List[Dict]]:
+def select_stocks_by_quality_proxy(sector_stocks: List[str], df: pd.DataFrame, top_n: int = 2) -> List[Dict]:
+    """免费数据质量代理池：用成交额、价格有效性和不过热约束挑选中长期候选。"""
+    try:
+        df = _base_trade_filter(sector_stocks, df)
+        if df.empty:
+            return []
+        df = df[(df['change_pct'] >= -3) & (df['change_pct'] <= 6)].copy()
+        if df.empty:
+            return []
+        # 免费实时行情没有稳定财务指标，先用成交额和不过热程度做分析前质量代理。
+        df['quality_proxy_score'] = df['amount'].rank(pct=True) * 70 + (6 - df['change_pct'].abs()).clip(lower=0) / 6 * 30
+        df = df.sort_values('quality_proxy_score', ascending=False).head(top_n)
+        return [
+            _stock_row_to_dict(
+                row,
+                f"质量池：成交活跃 · 涨跌幅{row['change_pct']:.2f}% · 成交{row['amount']:.0f}万",
+                "quality",
+            )
+            for _, row in df.iterrows()
+        ]
+    except Exception as e:
+        print(f"质量池选股失败: {e}")
+        return []
+
+
+def select_stocks_by_rotation(sector_stocks: List[str], df: pd.DataFrame,
+                              recently_analyzed: Set[str], top_n: int = 1) -> List[Dict]:
+    """轮动覆盖池：优先补充近期未分析且流动性尚可的股票。"""
+    try:
+        df = _base_trade_filter(sector_stocks, df)
+        if df.empty:
+            return []
+        df['ticker'] = df['code'].apply(_with_market_suffix)
+        df = df[~df['ticker'].isin(recently_analyzed)].copy()
+        if df.empty:
+            return []
+        volume_threshold = df['volume'].quantile(0.4)
+        df = df[(df['volume'] >= volume_threshold) & (df['change_pct'] >= -5) & (df['change_pct'] <= 8)]
+        df = df.sort_values(['amount', 'volume'], ascending=False).head(top_n)
+        return [
+            _stock_row_to_dict(
+                row,
+                f"轮动池：近期未分析 · 成交{row['amount']:.0f}万",
+                "rotation",
+            )
+            for _, row in df.iterrows()
+        ]
+    except Exception as e:
+        print(f"轮动池选股失败: {e}")
+        return []
+
+
+def _get_recently_analyzed_tickers(days: int = 7) -> Set[str]:
+    try:
+        from datetime import timedelta
+        from app.config import now_cn
+        from app.database import SessionLocal, AnalysisTask
+
+        db = SessionLocal()
+        try:
+            cutoff = now_cn() - timedelta(days=days)
+            rows = db.query(AnalysisTask.ticker).filter(AnalysisTask.created_at >= cutoff).all()
+            return {row[0] for row in rows}
+        finally:
+            db.close()
+    except Exception:
+        return set()
+
+
+def get_sector_hot_stocks(top_n_per_major_sector: int = 20, target_total: int = None) -> Dict[str, List[Dict]]:
     """
     获取各大板块热门股票
     
     Args:
         top_n_per_major_sector: 每个大板块取TOP N（默认20）
+        target_total: 全市场目标数量，传入后按三池候选质量截断到该数量
     
     返回: {
         "科技创新": [{"ticker": "688981.SH", "name": "中芯国际", ...}, ...],
@@ -222,17 +304,49 @@ def get_sector_hot_stocks(top_n_per_major_sector: int = 20) -> Dict[str, List[Di
     for sector in major_sector_stocks:
         major_sector_stocks[sector] = list(set(major_sector_stocks[sector]))
     
-    # 为每个大板块选股
+    recently_analyzed = _get_recently_analyzed_tickers(days=7)
+
+    # 为每个大板块按三池选股：动量 40%、质量 40%、轮动 20%
     all_hot_stocks = {}
     
+    overflow_candidates = []
+
     for major_sector, stocks in major_sector_stocks.items():
         print(f"\n正在选取 {major_sector} 板块热门股票...")
         
-        # 选股
-        hot_stocks = select_stocks_by_momentum(stocks, df, top_n=top_n_per_major_sector)
+        momentum_n = max(1, round(top_n_per_major_sector * 0.4))
+        quality_n = max(1, round(top_n_per_major_sector * 0.4))
+        rotation_n = max(0, top_n_per_major_sector - momentum_n - quality_n)
+
+        pools = [
+            select_stocks_by_momentum(stocks, df, top_n=momentum_n),
+            select_stocks_by_quality_proxy(stocks, df, top_n=quality_n),
+            select_stocks_by_rotation(stocks, df, recently_analyzed, top_n=rotation_n),
+        ]
+        hot_stocks = []
+        seen = set()
+        for pool in pools:
+            for stock in pool:
+                if stock['ticker'] in seen:
+                    continue
+                seen.add(stock['ticker'])
+                hot_stocks.append(stock)
+        if len(hot_stocks) < top_n_per_major_sector:
+            fallback = select_stocks_by_momentum(stocks, df, top_n=top_n_per_major_sector * 2)
+            for stock in fallback:
+                if stock['ticker'] in seen:
+                    continue
+                seen.add(stock['ticker'])
+                hot_stocks.append(stock)
+                if len(hot_stocks) >= top_n_per_major_sector:
+                    break
         
         if hot_stocks:
             all_hot_stocks[major_sector] = hot_stocks
+            for stock in hot_stocks:
+                pool_bonus = {"momentum": 3, "quality": 2, "rotation": 1}.get(stock.get("source_pool"), 0)
+                stock["selection_score"] = stock.get("amount", 0) + stock.get("change_pct", 0) * 1000 + pool_bonus * 100000
+                overflow_candidates.append((major_sector, stock))
             print(f"  ✓ 选出 {len(hot_stocks)} 只:")
             for i, stock in enumerate(hot_stocks[:5], 1):  # 只显示前5只
                 print(f"    {i}. {stock['name']}: {stock['selected_reason']}")
@@ -240,6 +354,27 @@ def get_sector_hot_stocks(top_n_per_major_sector: int = 20) -> Dict[str, List[Di
                 print(f"    ... 还有 {len(hot_stocks)-5} 只")
         else:
             print(f"  ✗ 未找到符合条件的股票")
+
+    if target_total and overflow_candidates:
+        overflow_candidates.sort(key=lambda x: x[1].get("selection_score", 0), reverse=True)
+        picked_by_sector = {sector: [] for sector in all_hot_stocks}
+        used = set()
+        # 先每个有候选的大板块保底 1 只，避免积极风格下单板块过度集中。
+        for sector in all_hot_stocks:
+            for cand_sector, stock in overflow_candidates:
+                if cand_sector == sector and stock["ticker"] not in used:
+                    picked_by_sector[sector].append(stock)
+                    used.add(stock["ticker"])
+                    break
+        for sector, stock in overflow_candidates:
+            if len(used) >= target_total:
+                break
+            if stock["ticker"] in used:
+                continue
+            picked_by_sector.setdefault(sector, []).append(stock)
+            used.add(stock["ticker"])
+        all_hot_stocks = {sector: stocks for sector, stocks in picked_by_sector.items() if stocks}
+        print(f"\n✓ 三池候选全局截断：目标 {target_total} 只，实际 {sum(len(v) for v in all_hot_stocks.values())} 只")
     
     return all_hot_stocks
 

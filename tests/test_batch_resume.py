@@ -235,6 +235,33 @@ def test_auto_analyze_signature_accepts_resume_state():
     assert params["resume_state"].default is None
 
 
+def test_write_batch_report_creates_html(tmp_path, monkeypatch):
+    """批量分析完成后必须生成最终 HTML 汇总报告"""
+    import auto_analyze_and_recommend as aar
+    import app.config as config
+
+    reports_dir = tmp_path / "reports"
+    monkeypatch.setattr(config, "SKILL_REPORTS_DIR", reports_dir)
+    monkeypatch.setattr(aar, "SKILL_REPORTS_DIR", reports_dir, raising=False)
+
+    path = aar._write_batch_report(
+        "2099-01-01",
+        "morning",
+        [{"task_id": None, "ticker": "600519.SH", "name": "贵州茅台"}],
+        {"completed": 1, "failed": 0},
+        [{"ticker": "600519.SH", "name": "贵州茅台（600519.SH）", "sector": "白酒", "score": 88.0,
+          "risk_level": "低风险", "reason": "长期 · 基本面优秀"}],
+    )
+
+    report_file = reports_dir / path
+    assert report_file.exists()
+    html = report_file.read_text(encoding="utf-8")
+    assert "批量推荐分析报告" in html
+    assert "贵州茅台（600519.SH）" in html
+    assert "筛选规则说明" in html
+    assert "未入选原因" in html
+
+
 def test_scheduler_has_resume_batch_job():
     """scheduler 必须暴露 resume_batch_job 协程"""
     import asyncio
@@ -331,7 +358,7 @@ def test_resume_end_to_end(tmp_path, monkeypatch):
 
     created, waited = [], []
 
-    def fake_create_task(ticker, depth="standard", owner_user_id=None):
+    def fake_create_task(ticker, depth="standard", owner_user_id=None, name=None):
         created.append(ticker)
         return f"new-{ticker}"
 
@@ -345,6 +372,7 @@ def test_resume_end_to_end(tmp_path, monkeypatch):
     monkeypatch.setattr(aar, "create_task", fake_create_task)
     monkeypatch.setattr(aar, "_wait_for_tasks", fake_wait)
     monkeypatch.setattr(aar, "_generate_recommendations", fake_gen)
+    monkeypatch.setattr(aar, "_write_batch_report", lambda *args, **kwargs: "batch-test/report.html")
     monkeypatch.setattr(aar, "NOTIFY_ON_ANALYSIS_COMPLETE", False)
 
     try:
