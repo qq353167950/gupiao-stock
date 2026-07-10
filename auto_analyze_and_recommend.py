@@ -15,12 +15,17 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
 import asyncio
+import html
 import math
 from datetime import timedelta
 from typing import Dict, List
 
 from app.config import (
     STOCKS_PER_SECTOR,
+    DAILY_ANALYSIS_TARGET_COUNT,
+    STRONG_RECOMMEND_LIMIT,
+    RECOMMEND_LIMIT,
+    OBSERVE_LIMIT,
     MAX_CONCURRENT_TASKS,
     NOTIFY_ON_ANALYSIS_COMPLETE,
     PUBLIC_BASE_URL,
@@ -28,8 +33,8 @@ from app.config import (
 )
 from app.batch_state import save_batch_state, load_batch_state, mark_batch_done
 from app.database import SessionLocal, DailyRecommendation, AnalysisTask
-from app.task_manager import create_task
-from app.recommendation_engine import calculate_composite_score
+from app.task_manager import create_task, format_stock_display_name
+from app.recommendation_engine import calculate_composite_score, evaluate_recommendation
 
 # 各深度单只股票预估耗时（分钟），用于计算最大等待时间
 PER_TASK_MINUTES = {"quick": 7, "standard": 25, "deep": 50}
@@ -143,21 +148,21 @@ def _generate_recommendations(
 
             scored = []
             for task in sub_sector_tasks:
-                # 显式排除高风险股票（trap-detector 判定），不依赖低分自然沉底
-                if task.risk_level and ("高风险" in task.risk_level):
-                    continue
                 composite_score, reason, period = calculate_composite_score(task)
+                evaluation = evaluate_recommendation(task)
+                if evaluation["recommendation_level"] == "回避":
+                    continue
                 scored.append({
                     "task": task,
                     "score": composite_score,
                     "reason": reason,
-                    "period": period
+                    "period": period,
+                    "evaluation": evaluation,
                 })
             scored.sort(key=lambda x: x["score"], reverse=True)
             sector_candidates[sub_sector] = scored
 
-        # 第二遍：按候选评分从高到低全局分配，每只股票只出现一次，
-        # 每个细分板块最多 2 个推荐
+        # 第二遍：按候选评分从高到低全局去重，再按推荐层级名额截断。
         all_candidates = [
             (sub_sector, item)
             for sub_sector, items in sector_candidates.items()
@@ -166,16 +171,41 @@ def _generate_recommendations(
         all_candidates.sort(key=lambda x: x[1]["score"], reverse=True)
 
         used_tickers = set()
+        level_limits = {
+            "强推荐": STRONG_RECOMMEND_LIMIT,
+            "推荐": RECOMMEND_LIMIT,
+            "观察": OBSERVE_LIMIT,
+        }
+        level_counts = {level: 0 for level in level_limits}
         sector_picks: Dict[str, List[dict]] = {}
+        skipped_candidates = []
         for sub_sector, item in all_candidates:
             ticker = item["task"].ticker
             if ticker in used_tickers:
                 continue
-            picks = sector_picks.setdefault(sub_sector, [])
-            if len(picks) >= 2:
-                continue
-            picks.append(item)
             used_tickers.add(ticker)
+            level = item["evaluation"]["recommendation_level"]
+            if level not in level_limits:
+                skipped_candidates.append({
+                    "ticker": ticker,
+                    "name": format_stock_display_name(item["task"].name, ticker),
+                    "score": item["score"],
+                    "level": level,
+                    "reason": item["evaluation"].get("exclude_reason") or "层级未进入展示范围",
+                })
+                continue
+            if level_counts[level] >= level_limits[level]:
+                skipped_candidates.append({
+                    "ticker": ticker,
+                    "name": format_stock_display_name(item["task"].name, ticker),
+                    "score": item["score"],
+                    "level": level,
+                    "reason": f"{level}名额已满",
+                })
+                continue
+            picks = sector_picks.setdefault(sub_sector, [])
+            picks.append(item)
+            level_counts[level] += 1
 
         # 第三遍：按板块写库（保持 A_STOCK_POOL 定义顺序，排名连续）
         sub_sector_recommendations: Dict[str, List[dict]] = {}
@@ -194,13 +224,14 @@ def _generate_recommendations(
                     bullish_ratio = task.bullish_count / task.total_voters
 
                 reason_text = f"{item['period']} · {item['reason']}"
+                evaluation = item["evaluation"]
 
                 recommendation = DailyRecommendation(
                     date=target_date,
                     ticker=task.ticker,
-                    name=task.name or task.ticker,
+                    name=format_stock_display_name(task.name, task.ticker),
                     rank=global_rank,
-                    score=task.score,
+                    score=item["score"],
                     dcf_discount=task.dcf_discount,
                     bullish_ratio=bullish_ratio,
                     reason=reason_text,
@@ -211,20 +242,197 @@ def _generate_recommendations(
                 global_rank += 1
 
                 sub_sector_recs.append({
-                    'name': task.name or task.ticker,
+                    'name': format_stock_display_name(task.name, task.ticker),
                     'ticker': task.ticker,
-                    'score': task.score,
+                    'score': item["score"],
                     'reason': reason_text,
                     'sector': sub_sector,
                     'risk_level': task.risk_level,
+                    'recommendation_level': evaluation["recommendation_level"],
+                    'data_quality': evaluation["data_quality"],
+                    'factor_scores': evaluation["factor_scores"],
                 })
 
             sub_sector_recommendations[sub_sector] = sub_sector_recs
 
         db.commit()
+        if skipped_candidates:
+            sub_sector_recommendations["__skipped__"] = skipped_candidates
         return sub_sector_recommendations
     finally:
         db.close()
+
+
+def _write_batch_report(
+    target_date: str,
+    recommendation_type: str,
+    analysis_tasks: List[dict],
+    stats: Dict[str, int],
+    recommendations: List[dict],
+) -> str:
+    """生成批量推荐最终 HTML 报告，返回可通过 /reports 访问的相对路径。"""
+    from app.config import SKILL_REPORTS_DIR, PUBLIC_BASE_URL, now_cn
+
+    report_dir = SKILL_REPORTS_DIR / f"batch-{target_date}-{recommendation_type}"
+    report_dir.mkdir(parents=True, exist_ok=True)
+    report_file = report_dir / "recommendations-report.html"
+
+    task_rows = []
+    db = SessionLocal()
+    try:
+        task_ids = [t["task_id"] for t in analysis_tasks if t.get("task_id")]
+        tasks = db.query(AnalysisTask).filter(AnalysisTask.task_id.in_(task_ids)).all() if task_ids else []
+        task_map = {task.task_id: task for task in tasks}
+        for item in analysis_tasks:
+            task = task_map.get(item.get("task_id"))
+            name = format_stock_display_name(
+                (task.name if task else item.get("name")),
+                item.get("ticker", ""),
+            )
+            evaluation = evaluate_recommendation(task) if task else None
+            score = evaluation["final_score"] if evaluation else None
+            task_rows.append({
+                "name": name,
+                "ticker": item.get("ticker", ""),
+                "status": task.status if task else "missing",
+                "score": score,
+                "risk_level": task.risk_level if task else "",
+                "recommendation_level": evaluation["recommendation_level"] if evaluation else "未分析",
+                "data_quality": evaluation["data_quality"] if evaluation else "D",
+                "exclude_reason": evaluation.get("exclude_reason") if evaluation else "任务缺失",
+                "factor_scores": evaluation["factor_scores"] if evaluation else {},
+                "report_path": task.report_path if task else "",
+            })
+    finally:
+        db.close()
+
+    rec_rows = sorted(
+        recommendations,
+        key=lambda r: r.get("score") if isinstance(r.get("score"), (int, float)) else 0,
+        reverse=True,
+    )
+    generated_at = now_cn().strftime("%Y-%m-%d %H:%M:%S")
+
+    def fmt_score(value):
+        return f"{value:.1f}" if isinstance(value, (int, float)) else "-"
+
+    rec_html = "".join(
+        f"""
+        <tr>
+          <td>{idx}</td>
+          <td>{html.escape(rec.get('name') or rec.get('ticker', ''))}</td>
+          <td>{html.escape(rec.get('sector', ''))}</td>
+          <td>{html.escape(rec.get('recommendation_level', ''))}</td>
+          <td>{fmt_score(rec.get('score'))}</td>
+          <td>{html.escape(rec.get('data_quality', ''))}</td>
+          <td>{html.escape(rec.get('risk_level') or '')}</td>
+          <td>{html.escape(rec.get('reason') or '')}</td>
+        </tr>
+        """
+        for idx, rec in enumerate(rec_rows, 1)
+    ) or '<tr><td colspan="8" class="empty">本批次暂无股票通过推荐筛选</td></tr>'
+
+    skipped_rows = [
+        {
+            "name": item.get("name") or item.get("ticker", ""),
+            "score": item.get("score"),
+            "recommendation_level": item.get("level", ""),
+            "data_quality": "",
+            "exclude_reason": item.get("reason", "综合排名靠后"),
+        }
+        for item in recommendations
+        if item.get("skipped")
+    ]
+    not_selected_rows = [row for row in task_rows if row["recommendation_level"] in ("谨慎", "回避")] + skipped_rows
+    not_selected_html = "".join(
+        f"""
+        <tr>
+          <td>{html.escape(row['name'])}</td>
+          <td>{fmt_score(row['score'])}</td>
+          <td>{html.escape(row['recommendation_level'])}</td>
+          <td>{html.escape(row['data_quality'])}</td>
+          <td>{html.escape(row['exclude_reason'] or '综合排名靠后')}</td>
+        </tr>
+        """
+        for row in not_selected_rows
+    ) or '<tr><td colspan="5" class="empty">本批次无明确淘汰项</td></tr>'
+
+    task_html = "".join(
+        f"""
+        <tr>
+          <td>{html.escape(row['name'])}</td>
+          <td>{html.escape(row['status'])}</td>
+          <td>{html.escape(row['recommendation_level'])}</td>
+          <td>{fmt_score(row['score'])}</td>
+          <td>{html.escape(row['data_quality'])}</td>
+          <td>{html.escape(row['risk_level'] or '')}</td>
+          <td>{'<a href="/reports/' + html.escape(row['report_path']) + '" target="_blank">查看个股报告</a>' if row['report_path'] else '-'}</td>
+        </tr>
+        """
+        for row in task_rows
+    )
+
+    report_file.write_text(f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{html.escape(target_date)} 批量推荐分析报告</title>
+  <style>
+    body {{ margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f7f4ef; color: #1f2421; }}
+    main {{ max-width: 1120px; margin: 0 auto; padding: 32px 20px; }}
+    .card {{ background: #fff; border: 1px solid #e7e1d7; border-radius: 18px; padding: 24px; margin-bottom: 20px; box-shadow: 0 10px 30px rgba(0,0,0,.04); }}
+    h1 {{ margin: 0 0 8px; font-size: 28px; }}
+    h2 {{ margin: 0 0 16px; font-size: 20px; }}
+    .meta {{ color: #6b7280; margin: 0; }}
+    .stats {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-top: 20px; }}
+    .stat {{ background: #fbf9f5; border-radius: 14px; padding: 16px; }}
+    .stat strong {{ display: block; font-size: 26px; color: #c4612f; }}
+    table {{ width: 100%; border-collapse: collapse; }}
+    th, td {{ padding: 12px; border-bottom: 1px solid #eee7dc; text-align: left; vertical-align: top; }}
+    th {{ color: #5c635d; font-size: 13px; background: #fbf9f5; }}
+    a {{ color: #c4612f; text-decoration: none; font-weight: 600; }}
+    .empty {{ text-align: center; color: #6b7280; padding: 28px; }}
+    .note {{ line-height: 1.7; color: #5c635d; }}
+  </style>
+</head>
+<body>
+  <main>
+    <section class="card">
+      <h1>{html.escape(target_date)} 批量推荐分析报告</h1>
+      <p class="meta">推荐类型：{html.escape(recommendation_type)} · 生成时间：{generated_at}</p>
+      <div class="stats">
+        <div class="stat"><span>分析任务</span><strong>{len(analysis_tasks)}</strong></div>
+        <div class="stat"><span>成功完成</span><strong>{stats.get('completed', 0)}</strong></div>
+        <div class="stat"><span>失败/超时</span><strong>{stats.get('failed', 0)}</strong></div>
+        <div class="stat"><span>入选推荐</span><strong>{len(recommendations)}</strong></div>
+      </div>
+    </section>
+    <section class="card">
+      <h2>筛选规则说明</h2>
+      <p class="note">系统先按三池模型生成每日约 {DAILY_ANALYSIS_TARGET_COUNT} 只候选股票：动量池捕捉市场热点，质量池用免费行情数据代理中长期候选，轮动池补充近期未分析股票。分析完成后按基本面、估值、成长、资金、趋势、风险、催化七类因子生成最终推荐分，并标记数据完整度 A/B/C/D。最终展示名额为强推荐 {STRONG_RECOMMEND_LIMIT} 只、推荐 {RECOMMEND_LIMIT} 只、观察 {OBSERVE_LIMIT} 只。</p>
+    </section>
+    <section class="card">
+      <h2>最终推荐</h2>
+      <table><thead><tr><th>排名</th><th>股票</th><th>板块</th><th>层级</th><th>评分</th><th>数据完整度</th><th>风险</th><th>推荐理由</th></tr></thead><tbody>{rec_html}</tbody></table>
+    </section>
+    <section class="card">
+      <h2>未入选原因</h2>
+      <table><thead><tr><th>股票</th><th>评分</th><th>层级</th><th>数据完整度</th><th>原因</th></tr></thead><tbody>{not_selected_html}</tbody></table>
+    </section>
+    <section class="card">
+      <h2>批量分析明细</h2>
+      <table><thead><tr><th>股票</th><th>状态</th><th>层级</th><th>评分</th><th>数据完整度</th><th>风险</th><th>个股报告</th></tr></thead><tbody>{task_html}</tbody></table>
+    </section>
+    <section class="card">
+      <p class="note">平台地址：{html.escape(PUBLIC_BASE_URL)}。以上内容仅供研究参考，投资决策请结合自身风险承受能力。</p>
+    </section>
+  </main>
+</body>
+</html>
+""", encoding="utf-8")
+
+    return f"{report_dir.name}/{report_file.name}"
 
 
 async def auto_analyze_and_recommend(
@@ -255,7 +463,7 @@ async def auto_analyze_and_recommend(
     print(f"🔥 {'♻️ 断点续跑' if resuming else '开始'}"
           f"{'早盘' if recommendation_type == 'morning' else '午盘'}推荐流程")
     print(f"   时间: {now_cn().strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"   深度: {depth} | 每板块选股: {STOCKS_PER_SECTOR}")
+    print(f"   深度: {depth} | 每日目标分析数: {DAILY_ANALYSIS_TARGET_COUNT}")
     print(f"{'='*70}\n")
 
     loop = asyncio.get_running_loop()
@@ -276,7 +484,10 @@ async def auto_analyze_and_recommend(
 
         print("📊 步骤1：获取市场热门股票...")
         sector_stocks = await loop.run_in_executor(
-            None, lambda: get_sector_hot_stocks(top_n_per_major_sector=STOCKS_PER_SECTOR)
+            None, lambda: get_sector_hot_stocks(
+                top_n_per_major_sector=STOCKS_PER_SECTOR,
+                target_total=DAILY_ANALYSIS_TARGET_COUNT,
+            )
         )
 
         if not sector_stocks:
@@ -334,7 +545,7 @@ async def auto_analyze_and_recommend(
             print(f"  ♻️ {stock_entry['name']} ({stock['ticker']}) 已完成，复用任务 {old_id}")
             continue
         try:
-            task_id = create_task(stock['ticker'], depth=depth)
+            task_id = create_task(stock['ticker'], depth=depth, name=stock.get('name'))
             stock['task_id'] = task_id  # 回写清单，供落盘后续跑使用
             analysis_tasks.append({
                 'task_id': task_id,
@@ -390,8 +601,12 @@ async def auto_analyze_and_recommend(
     print(f"{'='*70}\n")
 
     all_recs = []
+    skipped_recs = []
     major_sectors: Dict[str, Dict[str, List[dict]]] = {}
     for sub_sector, recs in sub_sector_recommendations.items():
+        if sub_sector == "__skipped__":
+            skipped_recs = [{**rec, "skipped": True} for rec in recs]
+            continue
         all_recs.extend(recs)
         major = get_major_sector(sub_sector)
         major_sectors.setdefault(major, {})[sub_sector] = recs
@@ -407,6 +622,10 @@ async def auto_analyze_and_recommend(
         print()
 
     print(f"共 {len(sub_sector_recommendations)} 个细分板块，{len(all_recs)} 只推荐股票")
+    batch_report_path = _write_batch_report(
+        target_date, recommendation_type, analysis_tasks, stats, all_recs + skipped_recs
+    )
+    print(f"批量推荐最终报告：{PUBLIC_BASE_URL}/reports/{batch_report_path}")
     print(f"\n🌐 访问平台查看完整推荐：{PUBLIC_BASE_URL}")
 
     # 6. 完成推送（可通过 NOTIFY_ON_ANALYSIS_COMPLETE=false 关闭，只保留早盘定时推送）

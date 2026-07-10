@@ -71,7 +71,10 @@ async def get_task(task_id: str, user: User = Depends(require_user)):
 async def get_history(limit: int = 10, db: Session = Depends(get_db),
                       user: User = Depends(require_user)):
     """获取历史记录（需登录；普通用户仅自己的记录，管理员可见全部）"""
-    query = db.query(AnalysisTask).filter(AnalysisTask.status == "completed")
+    query = db.query(AnalysisTask).filter(
+        AnalysisTask.status == "completed",
+        AnalysisTask.owner_user_id.isnot(None),
+    )
     if not user.is_admin:
         query = query.filter(AnalysisTask.owner_user_id == user.id)
     tasks = query.order_by(AnalysisTask.completed_at.desc()).limit(limit).all()
@@ -132,6 +135,8 @@ async def get_recommendations(rec_type: str = "all", db: Session = Depends(get_d
         if task:
             rec_dict['composite_score'] = task.composite_score
             rec_dict['risk_level'] = task.risk_level
+        rec_dict['recommendation_level'] = (rec.reason or '').split(' · ')[1] if rec.reason and ' · ' in rec.reason else ''
+        rec_dict['data_quality'] = ''
 
         sectors[sector].append(rec_dict)
 
