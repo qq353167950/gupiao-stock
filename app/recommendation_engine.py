@@ -34,7 +34,8 @@ def _parse_enhanced_result(task: AnalysisTask) -> Dict[str, Any]:
 
 def _score_data_quality(task: AnalysisTask) -> Tuple[str, int, list]:
     missing = []
-    if task.score is None:
+    has_analysis_score = task.score is not None or task.composite_score is not None
+    if not has_analysis_score:
         missing.append("体检分")
     if task.dcf_discount is None:
         missing.append("DCF估值")
@@ -49,7 +50,7 @@ def _score_data_quality(task: AnalysisTask) -> Tuple[str, int, list]:
         return "A", 100, missing
     if len(missing) <= 1:
         return "B", 85, missing
-    if task.score is not None and task.enhanced_result:
+    if has_analysis_score and task.enhanced_result:
         return "C", 65, missing
     return "D", 35, missing
 
@@ -84,7 +85,7 @@ def evaluate_recommendation(task: AnalysisTask) -> Dict[str, Any]:
     lhb = enhanced.get("lhb_analysis") or {}
     data_quality, data_quality_score, missing = _score_data_quality(task)
 
-    deep_score = _safe_float(task.score)
+    deep_score = _safe_float(task.score, _safe_float(task.composite_score))
     dcf_discount = _safe_float(task.dcf_discount)
     bullish_ratio = (
         task.bullish_count / task.total_voters

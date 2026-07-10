@@ -140,8 +140,7 @@ def _generate_recommendations(
 
             sub_sector_tasks = db.query(AnalysisTask).filter(
                 AnalysisTask.task_id.in_(sub_sector_task_ids),
-                AnalysisTask.status == "completed",
-                AnalysisTask.score.isnot(None)
+                AnalysisTask.status == "completed"
             ).all()
             if not sub_sector_tasks:
                 continue

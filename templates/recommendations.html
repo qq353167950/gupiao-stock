@@ -4,91 +4,83 @@
 
 {% block styles %}
 <style>
-    .sector-card {
-        transition: all 0.3s ease;
-    }
-    .sector-card:hover {
-        transform: translateY(-4px);
-        box-shadow: 0 12px 24px rgba(0, 0, 0, 0.1);
-    }
-    .stock-item {
-        transition: all 0.2s ease;
-        border-left: 3px solid transparent;
-    }
-    .stock-item:hover {
-        border-left-color: #667eea;
-        background: rgba(102, 126, 234, 0.05);
-    }
+    .sector-card { transition: transform .2s ease, box-shadow .2s ease; }
+    .sector-card:hover { transform: translateY(-3px); box-shadow: 0 24px 60px rgba(15, 23, 42, .10); }
+    .stock-item { transition: transform .18s ease, border-color .18s ease, background .18s ease; border: 1px solid rgba(15, 23, 42, .06); }
+    .stock-item:hover { transform: translateY(-2px); border-color: rgba(37, 99, 235, .22); background: rgba(255, 255, 255, .96); }
 </style>
 {% endblock %}
 
 {% block body_attrs %}x-data="recommendationsPage()"{% endblock %}
 
 {% block content %}
-<div class="max-w-7xl mx-auto px-6 py-12">
-
-    <div class="glass rounded-3xl p-8">
-        <div class="flex items-center justify-between mb-8">
+<div class="max-w-7xl mx-auto px-4 sm:px-6 py-10 sm:py-14">
+    <div class="glass rounded-[2rem] p-6 sm:p-8">
+        <div class="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-6 mb-8">
             <div>
-                <h2 class="text-2xl font-bold text-gray-900 mb-2">今日推荐</h2>
-                <p class="text-gray-500">
-                    A股24个细分板块 · 深度分析精选
+                <div class="inline-flex items-center gap-2 rounded-full bg-white/75 px-4 py-2 text-xs font-bold text-slate-500 soft-ring mb-4">
+                    强推荐 5 · 推荐 10 · 观察 20
+                </div>
+                <h2 class="text-3xl sm:text-4xl font-black tracking-tight text-slate-950 mb-3">今日推荐</h2>
+                <p class="text-slate-500">
+                    A股24个细分板块 · 三池选股 · 短中线积极模型
                     {% if request.state.user %} · 点击股票立即发起深度分析{% endif %}
                 </p>
             </div>
-            <div class="px-4 py-2 bg-purple-50 rounded-full">
-                <span class="text-purple-600 font-semibold" x-text="Object.keys(sectors).length + ' 个板块'"></span>
+            <div class="grid grid-cols-2 gap-3 sm:flex sm:items-center">
+                <div class="rounded-2xl bg-slate-950 px-5 py-4 text-white">
+                    <div class="text-2xl font-black" x-text="Object.keys(sectors).length"></div>
+                    <div class="text-xs text-white/60">覆盖板块</div>
+                </div>
+                <div class="rounded-2xl bg-white px-5 py-4 soft-ring">
+                    <div class="text-2xl font-black text-slate-950" x-text="totalStocks()"></div>
+                    <div class="text-xs text-slate-500">入选股票</div>
+                </div>
             </div>
         </div>
 
         {% if not request.state.user %}
-        <!-- 游客提示：推荐列表可浏览，发起分析/查看报告需登录 -->
-        <div class="mb-6 p-4 bg-purple-50 border border-purple-100 rounded-xl flex items-center justify-between">
-            <p class="text-sm text-purple-700">🔒 点击股票发起分析、查看详情报告需要登录</p>
-            <a href="/login?next=/recommendations" class="text-sm font-medium text-purple-600 hover:text-purple-800 whitespace-nowrap ml-4">前往登录 →</a>
+        <div class="mb-6 p-4 bg-blue-50/80 border border-blue-100 rounded-2xl flex items-center justify-between">
+            <p class="text-sm font-medium text-blue-700">点击股票发起分析、查看详情报告需要登录</p>
+            <a href="/login?next=/recommendations" class="text-sm font-bold text-blue-700 hover:text-blue-900 whitespace-nowrap ml-4">前往登录</a>
         </div>
         {% endif %}
 
-        <!-- 加载中 -->
         <div x-show="!loaded" class="text-center py-16">
-            <p class="text-gray-400">加载中...</p>
+            <p class="text-slate-400 font-medium">加载推荐数据...</p>
         </div>
 
-        <!-- 空态 -->
         <div x-show="loaded && Object.keys(sectors).length === 0" class="text-center py-16" x-cloak>
-            <div class="w-20 h-20 mx-auto mb-4 rounded-full bg-gray-100 flex items-center justify-center">
-                <span class="text-4xl">📊</span>
+            <div class="w-20 h-20 mx-auto mb-4 rounded-3xl bg-white soft-ring flex items-center justify-center">
+                <span class="text-3xl font-black gradient-text">0</span>
             </div>
-            <p class="text-gray-500">早盘推荐暂无数据</p>
-            <p class="text-sm text-gray-400 mt-2">每交易日 15:10 收盘后开始分析，次日 8:20 前完成</p>
+            <p class="text-slate-700 font-bold">早盘推荐暂无数据</p>
+            <p class="text-sm text-slate-400 mt-2">若批量分析已完成，请查看批次 HTML 报告中的未入选原因</p>
         </div>
 
-        <!-- 板块列表 -->
         <div class="grid grid-cols-1 gap-6" x-show="Object.keys(sectors).length > 0">
             <template x-for="(stocks, sectorName) in sectors" :key="sectorName">
-                <div class="sector-card bg-white rounded-2xl p-6 shadow-sm">
-                    <!-- 板块标题 -->
+                <div class="sector-card surface-card rounded-3xl p-5 sm:p-6">
                     <div class="flex items-center justify-between mb-4">
-                        <h3 class="text-lg font-bold text-gray-900" x-text="sectorName"></h3>
-                        <span class="text-sm text-gray-500" x-text="stocks.length + ' 只'"></span>
+                        <h3 class="text-xl font-black text-slate-950" x-text="sectorName"></h3>
+                        <span class="text-xs font-bold text-slate-500 bg-slate-100 px-3 py-1 rounded-full" x-text="stocks.length + ' 只'"></span>
                     </div>
 
-                    <!-- 股票列表 -->
                     <div class="space-y-3">
                         <template x-for="(stock, index) in stocks" :key="stock.ticker">
-                            <div class="stock-item p-4 rounded-xl cursor-pointer" @click="analyzeStock(stock.ticker)">
-                                <div class="flex items-center justify-between">
+                            <div class="stock-item p-4 rounded-2xl cursor-pointer bg-white/82" @click="analyzeStock(stock.ticker)">
+                                <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                                     <div class="flex items-center space-x-3 flex-1">
-                                        <span x-show="index === 0" class="text-2xl">🥇</span>
-                                        <span x-show="index !== 0" class="text-2xl">⭐</span>
+                                        <div class="w-11 h-11 rounded-2xl flex items-center justify-center font-black"
+                                             :class="index === 0 ? 'bg-slate-950 text-white' : 'bg-slate-100 text-slate-500'"
+                                             x-text="index + 1"></div>
                                         <div class="flex-1">
-                                            <div class="flex items-center space-x-2">
-                                                <h4 class="font-semibold text-gray-900" x-text="stock.name"></h4>
-                                                 <span class="text-xs text-gray-400" x-text="stock.ticker"></span>
-                                                 <span x-show="stock.recommendation_level" class="text-xs font-medium px-2 py-0.5 rounded bg-purple-100 text-purple-700" x-text="stock.recommendation_level"></span>
-                                                 <span x-show="stock.data_quality" class="text-xs font-medium px-2 py-0.5 rounded bg-gray-100 text-gray-600" x-text="'数据' + stock.data_quality"></span>
-                                                 <!-- 风险等级图标 -->
-                                                <span x-show="stock.risk_level" class="text-xs font-medium px-2 py-0.5 rounded"
+                                            <div class="flex flex-wrap items-center gap-2">
+                                                <h4 class="font-black text-slate-950" x-text="stock.name"></h4>
+                                                <span class="text-xs text-slate-400" x-text="stock.ticker"></span>
+                                                <span x-show="stock.recommendation_level" class="text-xs font-bold px-2.5 py-1 rounded-full bg-blue-50 text-blue-700" x-text="stock.recommendation_level"></span>
+                                                <span x-show="stock.data_quality" class="text-xs font-bold px-2.5 py-1 rounded-full bg-slate-100 text-slate-600" x-text="'数据' + stock.data_quality"></span>
+                                                <span x-show="stock.risk_level" class="text-xs font-bold px-2.5 py-1 rounded-full"
                                                       :class="{
                                                           'bg-green-100 text-green-700': stock.risk_level && stock.risk_level.includes('低风险'),
                                                           'bg-yellow-100 text-yellow-700': stock.risk_level && stock.risk_level.includes('中风险'),
@@ -97,24 +89,23 @@
                                                       }"
                                                       x-text="stock.risk_level"></span>
                                             </div>
-                                            <p class="text-sm text-gray-500 mt-1" x-text="stock.reason"></p>
+                                            <p class="text-sm text-slate-500 mt-1" x-text="stock.reason"></p>
                                         </div>
                                     </div>
-                                    <div class="text-right ml-4">
-                                        <div class="text-2xl font-bold gradient-text" x-text="stock.composite_score ? stock.composite_score.toFixed(0) : (stock.score ? stock.score.toFixed(0) : 'N/A')"></div>
-                                        <div class="text-xs text-gray-400">综合评分</div>
+                                    <div class="sm:text-right sm:ml-4">
+                                        <div class="text-3xl font-black gradient-text" x-text="stock.composite_score ? stock.composite_score.toFixed(0) : (stock.score ? stock.score.toFixed(0) : 'N/A')"></div>
+                                        <div class="text-xs font-semibold text-slate-400">最终评分</div>
                                     </div>
                                 </div>
 
-                                <!-- 数据指标 -->
-                                <div class="flex items-center space-x-6 mt-4 pt-4 border-t border-gray-100">
+                                <div class="flex flex-wrap items-center gap-4 mt-4 pt-4 border-t border-slate-100">
                                     <div x-show="stock.dcf_discount">
-                                        <span class="text-xs text-gray-500">DCF估值</span>
-                                        <span class="ml-2 text-sm font-semibold text-green-600" x-text="'低估' + (stock.dcf_discount * 100).toFixed(0) + '%'"></span>
+                                        <span class="text-xs text-slate-500">DCF估值</span>
+                                        <span class="ml-2 text-sm font-bold text-emerald-600" x-text="'低估' + (stock.dcf_discount * 100).toFixed(0) + '%'"></span>
                                     </div>
                                     <div x-show="stock.bullish_ratio">
-                                        <span class="text-xs text-gray-500">看多比例</span>
-                                        <span class="ml-2 text-sm font-semibold text-purple-600" x-text="(stock.bullish_ratio * 100).toFixed(0) + '%'"></span>
+                                        <span class="text-xs text-slate-500">看多比例</span>
+                                        <span class="ml-2 text-sm font-bold text-blue-600" x-text="(stock.bullish_ratio * 100).toFixed(0) + '%'"></span>
                                     </div>
                                 </div>
                             </div>
@@ -124,12 +115,10 @@
             </template>
         </div>
 
-        <!-- 点击股票发起分析失败的提示 -->
-        <div x-show="error" class="mt-6 p-4 bg-red-50 border border-red-200 rounded-xl text-red-600 text-sm" x-cloak>
+        <div x-show="error" class="mt-6 p-4 bg-red-50 border border-red-200 rounded-2xl text-red-600 text-sm" x-cloak>
             <span x-text="error"></span>
         </div>
     </div>
-
 </div>
 {% endblock %}
 
@@ -141,6 +130,10 @@
             loaded: false,
             analyzing: false,
             error: '',
+
+            totalStocks() {
+                return Object.values(this.sectors).reduce((sum, stocks) => sum + stocks.length, 0);
+            },
 
             async loadRecommendations() {
                 try {
@@ -155,7 +148,7 @@
             },
 
             async analyzeStock(ticker) {
-                if (this.analyzing) return;  // 防连点重复建任务
+                if (this.analyzing) return;
                 this.analyzing = true;
                 this.error = '';
                 try {

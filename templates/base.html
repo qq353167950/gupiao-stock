@@ -6,33 +6,56 @@
     <title>{% block title %}股票智能分析 - AI驱动的投资决策平台{% endblock %}</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
-        * { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; }
+        * { font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+        :root {
+            --ink: #101828;
+            --muted: #667085;
+            --line: rgba(15, 23, 42, 0.08);
+            --panel: rgba(255, 255, 255, 0.82);
+            --brand: #2563eb;
+            --brand-2: #14b8a6;
+            --accent: #7c3aed;
+        }
         body {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: var(--ink);
+            background:
+                radial-gradient(circle at top left, rgba(37, 99, 235, 0.14), transparent 32rem),
+                radial-gradient(circle at top right, rgba(20, 184, 166, 0.16), transparent 30rem),
+                linear-gradient(180deg, #f8fbff 0%, #eef4ff 45%, #f8fafc 100%);
             min-height: 100vh;
         }
         .glass {
-            background: rgba(255, 255, 255, 0.95);
-            backdrop-filter: blur(10px);
-            border: 1px solid rgba(255, 255, 255, 0.3);
+            background: var(--panel);
+            backdrop-filter: blur(18px);
+            border: 1px solid rgba(255, 255, 255, 0.72);
+            box-shadow: 0 24px 80px rgba(15, 23, 42, 0.08);
         }
         .gradient-text {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: linear-gradient(135deg, var(--brand) 0%, var(--accent) 55%, var(--brand-2) 100%);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             background-clip: text;
         }
         .btn-primary {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            transition: all 0.3s ease;
+            background: linear-gradient(135deg, var(--brand) 0%, var(--accent) 100%);
+            transition: transform 0.2s ease, box-shadow 0.2s ease, opacity 0.2s ease;
+            box-shadow: 0 14px 34px rgba(37, 99, 235, 0.22);
         }
         .btn-primary:hover {
             transform: translateY(-2px);
-            box-shadow: 0 10px 25px rgba(102, 126, 234, 0.3);
+            box-shadow: 0 18px 42px rgba(37, 99, 235, 0.30);
+        }
+        .surface-card {
+            background: rgba(255, 255, 255, 0.78);
+            border: 1px solid var(--line);
+            box-shadow: 0 16px 46px rgba(15, 23, 42, 0.07);
+        }
+        .soft-ring { border: 1px solid var(--line); }
+        [x-cloak] { display: none !important; }
+        @media (max-width: 768px) {
+            .nav-scroll { overflow-x: auto; scrollbar-width: none; }
+            .nav-scroll::-webkit-scrollbar { display: none; }
         }
     </style>
     {% block styles %}{% endblock %}
@@ -48,37 +71,37 @@
         ("/glossary", "名词解释"),
     ] %}
     {% set current_user = request.state.user %}
-    <nav class="glass shadow-lg">
-        <div class="max-w-7xl mx-auto px-6 py-4">
-            <div class="flex items-center justify-between">
+    <nav class="sticky top-0 z-40 border-b border-white/60 bg-white/70 backdrop-blur-2xl">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 py-3">
+            <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                 <a href="/" class="flex items-center space-x-3">
-                    <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-purple-500 to-indigo-600 flex items-center justify-center">
-                        <span class="text-white text-xl font-bold">📈</span>
+                    <div class="w-11 h-11 rounded-2xl bg-slate-950 flex items-center justify-center shadow-xl shadow-slate-900/10">
+                        <span class="text-white text-sm font-black tracking-tight">AI</span>
                     </div>
                     <div>
-                        <h1 class="text-xl font-bold text-gray-900">股票智能分析</h1>
-                        <p class="text-xs text-gray-500">AI驱动的投资决策平台</p>
+                        <h1 class="text-lg font-bold tracking-tight text-slate-950">股票智能分析</h1>
+                        <p class="text-xs text-slate-500">短中线多因子推荐系统</p>
                     </div>
                 </a>
-                <div class="flex items-center space-x-6">
+                <div class="nav-scroll flex items-center gap-2 lg:gap-3">
                     {% for path, label in nav_items %}
                     <a href="{{ path }}"
-                       class="{% if request.url.path == path %}text-purple-600 text-sm font-semibold{% else %}text-gray-600 hover:text-purple-600 text-sm font-medium{% endif %}">{{ label }}</a>
+                       class="whitespace-nowrap rounded-full px-4 py-2 text-sm font-semibold transition {% if request.url.path == path %}bg-slate-950 text-white shadow-lg shadow-slate-900/10{% else %}text-slate-600 hover:bg-white hover:text-slate-950{% endif %}">{{ label }}</a>
                     {% endfor %}
                     {% if current_user %}
                         {% if current_user.is_admin %}
                         <a href="/admin/users"
-                           class="{% if request.url.path == '/admin/users' %}text-purple-600 text-sm font-semibold{% else %}text-gray-600 hover:text-purple-600 text-sm font-medium{% endif %}">用户管理</a>
+                           class="whitespace-nowrap rounded-full px-4 py-2 text-sm font-semibold transition {% if request.url.path == '/admin/users' %}bg-slate-950 text-white shadow-lg shadow-slate-900/10{% else %}text-slate-600 hover:bg-white hover:text-slate-950{% endif %}">用户管理</a>
                         {% endif %}
-                        <div class="flex items-center space-x-3 pl-4 border-l border-gray-200">
+                        <div class="ml-1 flex items-center space-x-3 rounded-full bg-white/80 px-3 py-2 soft-ring">
                             <a href="/account" title="账号设置（修改密码）"
-                               class="text-sm {% if request.url.path == '/account' %}text-purple-600 font-semibold{% else %}text-gray-700 hover:text-purple-600{% endif %}">
-                                {{ current_user.username }}{% if current_user.is_admin %}<span class="ml-1 text-xs px-1.5 py-0.5 rounded bg-purple-100 text-purple-600">管理员</span>{% endif %}
+                               class="text-sm font-semibold {% if request.url.path == '/account' %}text-blue-600{% else %}text-slate-700 hover:text-blue-600{% endif %}">
+                                {{ current_user.username }}{% if current_user.is_admin %}<span class="ml-1 text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-600">管理员</span>{% endif %}
                             </a>
-                            <button onclick="logout()" class="text-sm text-gray-500 hover:text-red-500">退出</button>
+                            <button onclick="logout()" class="text-sm font-medium text-slate-400 hover:text-red-500">退出</button>
                         </div>
                     {% else %}
-                        <a href="/login" class="btn-primary text-white text-sm px-4 py-2 rounded-lg font-medium">登录</a>
+                        <a href="/login" class="btn-primary text-white text-sm px-5 py-2.5 rounded-full font-semibold">登录</a>
                     {% endif %}
                 </div>
             </div>

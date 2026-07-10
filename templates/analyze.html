@@ -1,309 +1,173 @@
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>分析中 - 股票智能分析平台</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
-    <style>
-        body { background: #F7F4EF; }
-        .card { background: #FBF9F5; }
-        .progress-bar { background: #E7E1D7; }
-        .progress-fill { 
-            background: #C4612F; 
-            transition: width 0.5s ease;
-        }
-        
-        /* 加载动画 */
-        .spinner {
-            display: inline-block;
-            width: 20px;
-            height: 20px;
-            border: 3px solid #E7E1D7;
-            border-top-color: #C4612F;
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-        }
-        
-        @keyframes spin {
-            to { transform: rotate(360deg); }
-        }
-        
-        /* 脉动动画 */
-        .pulse {
-            animation: pulse 2s ease-in-out infinite;
-        }
-        
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.5; }
-        }
-        
-        /* 心跳指示器 */
-        .heartbeat {
-            display: inline-block;
-            width: 8px;
-            height: 8px;
-            background: #10b981;
-            border-radius: 50%;
-            animation: heartbeat 1.5s ease-in-out infinite;
-        }
-        
-        @keyframes heartbeat {
-            0%, 100% { transform: scale(1); opacity: 1; }
-            50% { transform: scale(1.5); opacity: 0.7; }
-        }
-        
-        .heartbeat-dead {
-            background: #ef4444;
-            animation: none;
-        }
-    </style>
-</head>
-<body class="min-h-screen" x-data="analysisProgress()">
-    
-    <!-- 头部 -->
-    <div class="bg-white shadow-sm border-b border-[#E7E1D7]">
-        <div class="max-w-4xl mx-auto px-4 py-4">
-            <div class="flex items-center justify-between">
-                <h1 class="text-2xl font-bold text-[#1F2421]">📊 股票智能分析平台</h1>
-                <div class="flex items-center space-x-4">
-                    <a href="/glossary" class="text-[#C4612F] hover:text-[#A94E22]">名词解释</a>
-                    <a href="/" class="text-[#5C635D] hover:text-[#1F2421]">返回首页</a>
-                </div>
-            </div>
-        </div>
-    </div>
+{% extends "base.html" %}
 
-    <div class="max-w-4xl mx-auto px-4 py-8">
-        
-        <div class="card rounded-2xl p-8 shadow-sm">
-            
-            <!-- 标题 -->
-            <div class="text-center mb-8">
-                <h2 class="text-2xl font-bold text-[#1F2421] mb-2" x-text="task.name || task.ticker || '分析中'"></h2>
-                <p class="text-[#5C635D]" x-text="task.ticker"></p>
+{% block title %}分析进度 - 股票智能分析{% endblock %}
+
+{% block styles %}
+<style>
+    .progress-track { background: rgba(15, 23, 42, .08); }
+    .progress-fill { background: linear-gradient(135deg, #2563eb, #7c3aed, #14b8a6); transition: width .5s ease; }
+    .spinner { width: 20px; height: 20px; border: 3px solid rgba(37, 99, 235, .15); border-top-color: #2563eb; border-radius: 999px; animation: spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .stage-dot { transition: all .2s ease; }
+</style>
+{% endblock %}
+
+{% block body_attrs %}x-data="analysisProgress()"{% endblock %}
+
+{% block content %}
+<div class="max-w-5xl mx-auto px-4 sm:px-6 py-10 sm:py-14">
+    <div class="glass rounded-[2rem] p-6 sm:p-10 overflow-hidden relative">
+        <div class="absolute -right-24 -top-24 h-72 w-72 rounded-full bg-blue-400/20 blur-3xl"></div>
+        <div class="relative">
+            <div class="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-6 mb-8">
+                <div>
+                    <div class="inline-flex items-center gap-2 rounded-full bg-white/75 px-4 py-2 text-xs font-bold text-slate-500 soft-ring mb-4">
+                        <span class="h-2 w-2 rounded-full" :class="task.status === 'failed' ? 'bg-red-500' : task.status === 'completed' ? 'bg-emerald-500' : 'bg-blue-500'"></span>
+                        <span x-text="task.status === 'completed' ? '分析完成' : task.status === 'failed' ? '分析失败' : '智能分析进行中'"></span>
+                    </div>
+                    <h2 class="text-3xl sm:text-5xl font-black tracking-tight text-slate-950 mb-3" x-text="task.name || task.ticker || '分析中'"></h2>
+                    <p class="text-slate-500" x-text="task.ticker || '正在读取任务信息'"></p>
+                </div>
+                <div class="rounded-3xl bg-white px-6 py-5 soft-ring min-w-[150px]">
+                    <div class="text-4xl font-black gradient-text" x-text="(task.progress || 0) + '%'"></div>
+                    <div class="text-xs font-semibold text-slate-400 mt-1">当前进度</div>
+                </div>
             </div>
-            
-            <!-- 进度条 -->
+
             <div class="mb-8">
-                <div class="progress-bar h-3 rounded-full overflow-hidden mb-2">
-                    <div 
-                        class="progress-fill h-full transition-all duration-500"
-                        :style="`width: ${task.progress || 0}%`"
-                    ></div>
+                <div class="progress-track h-4 rounded-full overflow-hidden mb-3">
+                    <div class="progress-fill h-full rounded-full" :style="`width: ${task.progress || 0}%`"></div>
                 </div>
-                <div class="flex justify-between text-sm text-[#5C635D]">
-                    <span x-text="task.progress + '%'"></span>
-                    <span x-show="estimatedTime > 0" x-text="'预计剩余: ' + formatTime(estimatedTime)"></span>
+                <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 text-sm text-slate-500">
+                    <span x-text="task.current_stage || '等待任务状态更新'"></span>
+                    <span x-show="estimatedTime > 0" x-text="'预计剩余 ' + formatTime(estimatedTime)"></span>
                 </div>
             </div>
-            
-            <!-- 当前阶段 -->
-            <div class="mb-8 text-center">
-                <p class="text-lg text-[#1F2421] mb-4 flex items-center justify-center space-x-3">
-                    <span x-show="task.status === 'pending'" class="pulse">⏳ 等待开始...</span>
-                    <span x-show="task.status === 'running'" class="flex items-center space-x-2">
-                        <span class="spinner"></span>
-                        <span x-text="task.current_stage || '分析中...'"></span>
-                    </span>
-                    <span x-show="task.status === 'completed'" class="text-green-600">✓ 分析完成！</span>
-                    <span x-show="task.status === 'failed'" class="text-red-600">✗ 分析失败</span>
-                </p>
-                
-                <!-- 预计时间提示 -->
-                <div class="text-sm text-[#5C635D] space-y-1">
-                    <p x-show="task.depth === 'quick' && task.status === 'running'">预计需要 5-10 分钟，请耐心等待</p>
-                    <p x-show="task.depth === 'standard' && task.status === 'running'">预计需要 20-30 分钟，请耐心等待</p>
-                    <p x-show="task.depth === 'deep' && task.status === 'running'">预计需要 40-60 分钟，请耐心等待</p>
-                    <p x-show="lastUpdate && task.status === 'running'" class="text-xs" x-text="'最后更新: ' + lastUpdate"></p>
+
+            <div class="surface-card rounded-3xl p-6 mb-8">
+                <div class="flex items-center justify-center gap-3 text-lg font-bold text-slate-950 mb-4">
+                    <span x-show="task.status === 'pending'">等待进入分析队列</span>
+                    <span x-show="task.status === 'running'" class="flex items-center gap-3"><span class="spinner"></span><span x-text="task.current_stage || '分析中...'"></span></span>
+                    <span x-show="task.status === 'completed'" class="text-emerald-600">分析完成</span>
+                    <span x-show="task.status === 'failed'" class="text-red-600">分析失败</span>
+                </div>
+                <p x-show="lastUpdate && task.status === 'running'" class="text-center text-xs text-slate-400" x-text="'最后更新 ' + lastUpdate"></p>
+
+                <div class="grid grid-cols-1 sm:grid-cols-5 gap-3 mt-6">
+                    <template x-for="stage in stages" :key="stage.label">
+                        <div class="rounded-2xl p-4 soft-ring bg-white/80">
+                            <div class="stage-dot w-8 h-8 rounded-full flex items-center justify-center text-sm font-black mb-3"
+                                 :class="task.progress >= stage.progress ? 'bg-slate-950 text-white' : 'bg-slate-100 text-slate-400'"
+                                 x-text="task.progress >= stage.progress ? '✓' : stage.index"></div>
+                            <div class="text-sm font-bold" :class="task.progress >= stage.progress ? 'text-slate-950' : 'text-slate-400'" x-text="stage.label"></div>
+                        </div>
+                    </template>
                 </div>
             </div>
-            
-            <!-- 阶段列表 -->
-            <div class="space-y-3 mb-8">
-                <div class="flex items-center space-x-3" :class="task.progress >= 20 ? 'text-[#1F2421]' : 'text-[#5C635D]'">
-                    <span x-show="task.progress >= 20">✓</span>
-                    <span x-show="task.progress < 20">○</span>
-                    <span>数据采集</span>
-                </div>
-                <div class="flex items-center space-x-3" :class="task.progress >= 40 ? 'text-[#1F2421]' : 'text-[#5C635D]'">
-                    <span x-show="task.progress >= 40">✓</span>
-                    <span x-show="task.progress < 40 && task.progress >= 20">⟳</span>
-                    <span x-show="task.progress < 20">○</span>
-                    <span>财务建模</span>
-                </div>
-                <div class="flex items-center space-x-3" :class="task.progress >= 60 ? 'text-[#1F2421]' : 'text-[#5C635D]'">
-                    <span x-show="task.progress >= 60">✓</span>
-                    <span x-show="task.progress < 60 && task.progress >= 40">⟳</span>
-                    <span x-show="task.progress < 40">○</span>
-                    <span>评委评审</span>
-                </div>
-                <div class="flex items-center space-x-3" :class="task.progress >= 80 ? 'text-[#1F2421]' : 'text-[#5C635D]'">
-                    <span x-show="task.progress >= 80">✓</span>
-                    <span x-show="task.progress < 80 && task.progress >= 60">⟳</span>
-                    <span x-show="task.progress < 60">○</span>
-                    <span>综合研判</span>
-                </div>
-                <div class="flex items-center space-x-3" :class="task.progress >= 90 ? 'text-[#1F2421]' : 'text-[#5C635D]'">
-                    <span x-show="task.progress >= 90">✓</span>
-                    <span x-show="task.progress < 90 && task.progress >= 80">⟳</span>
-                    <span x-show="task.progress < 80">○</span>
-                    <span>报告生成</span>
-                </div>
-            </div>
-            
-            <!-- 错误信息 -->
-            <div x-show="task.status === 'failed'" class="p-4 bg-red-50 border border-red-200 rounded-lg text-red-700 mb-4">
-                <p class="font-semibold mb-2">分析失败</p>
+
+            <div x-show="task.status === 'failed'" class="p-5 bg-red-50 border border-red-200 rounded-2xl text-red-700 mb-6" x-cloak>
+                <p class="font-bold mb-2">分析失败</p>
                 <p class="text-sm" x-text="task.error_message || '未知错误，请重试'"></p>
             </div>
-            
-            <!-- 操作按钮 -->
-            <div class="flex justify-center space-x-4">
-                <a 
-                    x-show="task.status === 'completed' && task.report_url"
-                    :href="task.report_url"
-                    target="_blank"
-                    class="px-8 py-3 bg-[#C4612F] text-white rounded-full font-medium hover:bg-[#A94E22] transition-colors"
-                >
-                    查看报告
-                </a>
-                
-                <a 
-                    x-show="task.status === 'completed'"
-                    :href="'/report/' + taskId"
-                    class="px-8 py-3 border border-[#C4612F] text-[#C4612F] rounded-full font-medium hover:bg-[#C4612F] hover:text-white transition-colors"
-                >
-                    查看摘要
-                </a>
-                
-                <button 
-                    x-show="task.status === 'failed'"
-                    @click="window.location.href = '/'"
-                    class="px-8 py-3 border border-[#C4612F] text-[#C4612F] rounded-full font-medium hover:bg-[#C4612F] hover:text-white transition-colors"
-                >
-                    返回重试
-                </button>
-            </div>
-            
-        </div>
-        
-    </div>
 
-    <script>
-        function analysisProgress() {
-            return {
-                taskId: '',
-                task: {},
-                estimatedTime: 0,
-                pollingInterval: null,
-                lastUpdate: '',
-                startTime: null,
-                
-                async loadTask() {
-                    try {
-                        const response = await fetch(`/api/task/${this.taskId}`);
-                        if (response.ok) {
-                            this.task = await response.json();
-                            this.updateStatus();
-                        }
-                    } catch (err) {
-                        console.error('加载任务失败:', err);
+            <div class="flex flex-col sm:flex-row justify-center gap-3">
+                <a x-show="task.status === 'completed' && task.report_url" :href="task.report_url" target="_blank" class="btn-primary text-white px-8 py-3 rounded-2xl font-bold text-center" x-cloak>查看完整报告</a>
+                <a x-show="task.status === 'completed'" :href="'/report/' + taskId" class="px-8 py-3 bg-white text-slate-950 soft-ring rounded-2xl font-bold text-center hover:bg-slate-50 transition" x-cloak>查看摘要</a>
+                <button x-show="task.status === 'failed'" @click="window.location.href = '/'" class="px-8 py-3 bg-white text-slate-950 soft-ring rounded-2xl font-bold hover:bg-slate-50 transition" x-cloak>返回重试</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    function analysisProgress() {
+        return {
+            taskId: '',
+            task: {},
+            estimatedTime: 0,
+            pollingInterval: null,
+            lastUpdate: '',
+            startTime: null,
+            stages: [
+                { index: 1, progress: 20, label: '数据采集' },
+                { index: 2, progress: 40, label: '财务建模' },
+                { index: 3, progress: 60, label: '评委评审' },
+                { index: 4, progress: 80, label: '综合研判' },
+                { index: 5, progress: 90, label: '报告生成' },
+            ],
+
+            async loadTask() {
+                try {
+                    const response = await fetch(`/api/task/${this.taskId}`);
+                    if (response.ok) {
+                        this.task = await response.json();
+                        this.updateStatus();
                     }
-                },
-                
-                updateStatus() {
-                    // 更新最后更新时间
-                    const now = new Date();
-                    this.lastUpdate = now.toLocaleTimeString('zh-CN');
-                },
-                
-                getPollingInterval() {
-                    // 根据运行时间动态调整轮询间隔
-                    if (!this.startTime) return 60000;  // 默认60秒
-                    
-                    const elapsed = (Date.now() - this.startTime) / 1000; // 秒
-                    
-                    // 根据分析深度设置总预计时间
-                    let estimatedTotal = 600;  // 默认10分钟
-                    if (this.task.depth === 'quick') {
-                        estimatedTotal = 600;  // 10分钟
-                    } else if (this.task.depth === 'standard') {
-                        estimatedTotal = 1500;  // 25分钟
-                    } else if (this.task.depth === 'deep') {
-                        estimatedTotal = 3000;  // 50分钟
-                    }
-                    
-                    // 按比例计算阶段
-                    const stage1 = estimatedTotal * 0.6;  // 前60%时间
-                    const stage2 = estimatedTotal * 0.8;  // 前80%时间
-                    
-                    if (elapsed < stage1) {
-                        return 60000;  // 前60%：每60秒
-                    } else if (elapsed < stage2) {
-                        return 30000;  // 60%-80%：每30秒
-                    } else {
-                        return 10000;  // 最后20%：每10秒（快完成了，加快检测）
-                    }
-                },
-                
-                startPolling() {
-                    // 避免重复启动
-                    if (this.pollingInterval) return;
-                    
-                    const poll = async () => {
-                        if (this.task.status !== 'completed' && this.task.status !== 'failed') {
-                            await this.loadTask();
-                            
-                            // 如果完成或失败，停止轮询（不自动跳转）
-                            if (this.task.status === 'completed' || this.task.status === 'failed') {
-                                clearInterval(this.pollingInterval);
-                            } else {
-                                // 根据运行时间调整下次轮询间隔
-                                clearInterval(this.pollingInterval);
-                                this.pollingInterval = setInterval(poll, this.getPollingInterval());
-                            }
+                } catch (err) {
+                    console.error('加载任务失败:', err);
+                }
+            },
+
+            updateStatus() {
+                this.lastUpdate = new Date().toLocaleTimeString('zh-CN');
+                if (this.task.status === 'running' && this.task.progress) {
+                    const elapsed = (Date.now() - this.startTime) / 1000;
+                    const progress = Math.max(this.task.progress, 1);
+                    const estimatedTotal = elapsed / (progress / 100);
+                    this.estimatedTime = Math.max(0, Math.round(estimatedTotal - elapsed));
+                } else {
+                    this.estimatedTime = 0;
+                }
+            },
+
+            getPollingInterval() {
+                if (!this.startTime) return 60000;
+                const elapsed = (Date.now() - this.startTime) / 1000;
+                let estimatedTotal = 600;
+                if (this.task.depth === 'standard') estimatedTotal = 1500;
+                if (this.task.depth === 'deep') estimatedTotal = 3000;
+                if (elapsed < estimatedTotal * 0.6) return 60000;
+                if (elapsed < estimatedTotal * 0.8) return 30000;
+                return 10000;
+            },
+
+            startPolling() {
+                if (this.pollingInterval) return;
+                const poll = async () => {
+                    if (this.task.status !== 'completed' && this.task.status !== 'failed') {
+                        await this.loadTask();
+                        if (this.task.status === 'completed' || this.task.status === 'failed') {
+                            clearInterval(this.pollingInterval);
                         } else {
                             clearInterval(this.pollingInterval);
+                            this.pollingInterval = setInterval(poll, this.getPollingInterval());
                         }
-                    };
-                    
-                    // 立即执行一次
-                    poll();
-                },
-                
-                viewReport() {
-                    window.location.href = `/report/${this.taskId}`;
-                },
-                
-                formatTime(seconds) {
-                    const mins = Math.floor(seconds / 60);
-                    const secs = seconds % 60;
-                    return `${mins}分${secs}秒`;
-                },
-                
-                init() {
-                    const params = new URLSearchParams(window.location.search);
-                    this.taskId = params.get('task_id');
-                    
-                    if (!this.taskId) {
-                        window.location.href = '/';
-                        return;
+                    } else {
+                        clearInterval(this.pollingInterval);
                     }
-                    
-                    // 记录开始时间
-                    this.startTime = Date.now();
-                    
-                    // 先加载一次任务状态
-                    this.loadTask().then(() => {
-                        // 启动智能轮询
-                        this.startPolling();
-                    });
+                };
+                poll();
+            },
+
+            formatTime(seconds) {
+                const mins = Math.floor(seconds / 60);
+                const secs = seconds % 60;
+                return `${mins}分${secs}秒`;
+            },
+
+            init() {
+                const params = new URLSearchParams(window.location.search);
+                this.taskId = params.get('task_id');
+                if (!this.taskId) {
+                    window.location.href = '/';
+                    return;
                 }
+                this.startTime = Date.now();
+                this.loadTask().then(() => this.startPolling());
             }
         }
-    </script>
-</body>
-</html>
+    }
+</script>
+{% endblock %}
