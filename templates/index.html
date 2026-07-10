@@ -5,81 +5,92 @@
 {% block body_attrs %}x-data="analyzePage()"{% endblock %}
 
 {% block content %}
-<div class="max-w-7xl mx-auto px-6 py-12">
+<div class="max-w-7xl mx-auto px-4 sm:px-6 py-10 sm:py-14">
 
-    <!-- 开始分析（主功能区） -->
-    <div class="glass rounded-3xl p-12 text-center">
-        <h2 class="text-4xl font-bold gradient-text mb-4">智能分析，精准决策</h2>
-        <p class="text-gray-600 text-lg mb-8">基于22维数据深度分析，50位AI评委投票，DCF/LBO双重估值</p>
+    <div class="grid grid-cols-1 lg:grid-cols-[1.05fr_0.95fr] gap-8 items-stretch">
+    <div class="glass rounded-[2rem] p-8 sm:p-12 overflow-hidden relative">
+        <div class="absolute -right-20 -top-20 h-64 w-64 rounded-full bg-blue-400/20 blur-3xl"></div>
+        <div class="absolute -left-24 bottom-0 h-72 w-72 rounded-full bg-teal-300/20 blur-3xl"></div>
+        <div class="relative">
+            <div class="inline-flex items-center gap-2 rounded-full bg-white/75 px-4 py-2 text-sm font-semibold text-slate-600 soft-ring mb-8">
+                <span class="h-2 w-2 rounded-full bg-emerald-500"></span>
+                每日 50 只 · 短线70% / 中线30% · 积极策略
+            </div>
+            <h2 class="text-4xl sm:text-6xl font-black tracking-tight text-slate-950 leading-tight mb-5">
+                用多因子系统<br><span class="gradient-text">筛出今日机会</span>
+            </h2>
+            <p class="text-slate-600 text-lg leading-8 mb-8 max-w-2xl">三池选股、风险识别、DCF估值、评委投票与龙虎榜资金信号合并评估，输出强推荐、推荐与观察名单。</p>
 
         {% if not request.state.user %}
-        <!-- 游客提示：发起分析需登录（前端拦截，不发无谓请求） -->
-        <div class="max-w-2xl mx-auto mb-6 p-4 bg-purple-50 border border-purple-100 rounded-xl flex items-center justify-between">
-            <p class="text-sm text-purple-700">🔒 发起分析需要登录账号</p>
-            <a href="/login?next=/" class="text-sm font-medium text-purple-600 hover:text-purple-800 whitespace-nowrap ml-4">前往登录 →</a>
+        <div class="mb-6 p-4 bg-blue-50/80 border border-blue-100 rounded-2xl flex items-center justify-between">
+            <p class="text-sm font-medium text-blue-700">发起分析需要登录账号</p>
+            <a href="/login?next=/" class="text-sm font-bold text-blue-700 hover:text-blue-900 whitespace-nowrap ml-4">前往登录</a>
         </div>
         {% endif %}
 
-        <!-- 搜索框 -->
-        <div class="max-w-2xl mx-auto">
-            <div class="relative">
+        <div class="max-w-3xl">
+            <div class="relative rounded-3xl bg-white p-2 soft-ring shadow-2xl shadow-blue-900/10">
                 <input
                     type="text"
                     x-model="ticker"
                     placeholder="输入股票代码或名称，如 600519 / 贵州茅台 / AAPL"
-                    class="w-full px-6 py-4 rounded-2xl border-2 border-gray-200 focus:border-purple-500 focus:outline-none text-lg shadow-sm"
+                    class="w-full px-5 sm:px-6 py-4 pr-36 rounded-2xl border-0 focus:ring-0 focus:outline-none text-base sm:text-lg bg-transparent"
                     @keyup.enter="startAnalysis()"
                 >
                 <button
                     @click="startAnalysis()"
                     :disabled="loading"
-                    class="absolute right-2 top-2 btn-primary text-white px-8 py-3 rounded-xl font-medium disabled:opacity-50"
+                    class="absolute right-2 top-2 btn-primary text-white px-5 sm:px-8 py-3 rounded-2xl font-bold disabled:opacity-50"
                 >
                     <span x-show="!loading">开始分析</span>
                     <span x-show="loading">分析中...</span>
                 </button>
             </div>
 
-            <!-- 分析深度选择 -->
-            <div class="flex items-center justify-center space-x-4 mt-6">
-                <label class="flex items-center space-x-2 cursor-pointer">
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-5">
+                <label class="flex items-center justify-center gap-2 cursor-pointer rounded-2xl bg-white/70 px-4 py-3 soft-ring">
                     <input type="radio" x-model="depth" value="quick" class="text-purple-600 focus:ring-purple-500">
-                    <span class="text-sm text-gray-600">快速 (5-10分钟)</span>
+                    <span class="text-sm font-semibold text-slate-600">快速 5-10分钟</span>
                 </label>
-                <label class="flex items-center space-x-2 cursor-pointer">
+                <label class="flex items-center justify-center gap-2 cursor-pointer rounded-2xl bg-white/90 px-4 py-3 soft-ring">
                     <input type="radio" x-model="depth" value="standard" class="text-purple-600 focus:ring-purple-500" checked>
-                    <span class="text-sm font-medium text-gray-900">标准 (20-30分钟)</span>
+                    <span class="text-sm font-bold text-slate-900">标准 20-30分钟</span>
                 </label>
-                <label class="flex items-center space-x-2 cursor-pointer">
+                <label class="flex items-center justify-center gap-2 cursor-pointer rounded-2xl bg-white/70 px-4 py-3 soft-ring">
                     <input type="radio" x-model="depth" value="deep" class="text-purple-600 focus:ring-purple-500">
-                    <span class="text-sm text-gray-600">深度 (40-60分钟)</span>
+                    <span class="text-sm font-semibold text-slate-600">深度 40-60分钟</span>
                 </label>
             </div>
 
-            <!-- 错误提示 -->
-            <div x-show="error" class="mt-4 p-4 bg-red-50 border border-red-200 rounded-xl text-red-600 text-sm">
+            <div x-show="error" class="mt-4 p-4 bg-red-50 border border-red-200 rounded-2xl text-red-600 text-sm" x-cloak>
                 <span x-text="error"></span>
             </div>
         </div>
+        </div>
     </div>
 
-    <!-- 功能入口卡片 -->
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mt-8">
-        <a href="/recommendations" class="glass rounded-2xl p-8 text-center hover:shadow-xl transition-all hover:-translate-y-1">
-            <div class="text-4xl mb-3">🥇</div>
-            <h3 class="text-lg font-bold text-gray-900 mb-2">今日推荐</h3>
-            <p class="text-sm text-gray-500">每交易日收盘后深度分析，分板块精选推荐</p>
+    <div class="grid grid-cols-1 gap-5">
+        <div class="surface-card rounded-[2rem] p-7">
+            <p class="text-sm font-bold text-slate-400 uppercase tracking-[0.2em] mb-4">Recommendation Engine</p>
+            <div class="grid grid-cols-3 gap-3">
+                <div class="rounded-2xl bg-slate-950 p-5 text-white"><div class="text-3xl font-black">5</div><div class="text-xs text-white/60 mt-1">强推荐</div></div>
+                <div class="rounded-2xl bg-blue-600 p-5 text-white"><div class="text-3xl font-black">10</div><div class="text-xs text-white/70 mt-1">推荐</div></div>
+                <div class="rounded-2xl bg-white p-5 soft-ring"><div class="text-3xl font-black text-slate-950">20</div><div class="text-xs text-slate-500 mt-1">观察</div></div>
+            </div>
+        </div>
+        <a href="/recommendations" class="surface-card rounded-3xl p-6 hover:-translate-y-1 hover:shadow-2xl transition-all block">
+            <div class="flex items-center justify-between"><h3 class="text-xl font-black text-slate-950">今日推荐</h3><span class="text-blue-600 font-bold">查看</span></div>
+            <p class="text-sm text-slate-500 mt-2">分层展示强推荐、推荐与观察池。</p>
         </a>
-        <a href="/history" class="glass rounded-2xl p-8 text-center hover:shadow-xl transition-all hover:-translate-y-1">
-            <div class="text-4xl mb-3">🗂️</div>
-            <h3 class="text-lg font-bold text-gray-900 mb-2">历史记录</h3>
-            <p class="text-sm text-gray-500">查看已完成的分析任务与报告</p>
+        <a href="/history" class="surface-card rounded-3xl p-6 hover:-translate-y-1 hover:shadow-2xl transition-all block">
+            <div class="flex items-center justify-between"><h3 class="text-xl font-black text-slate-950">历史记录</h3><span class="text-blue-600 font-bold">查看</span></div>
+            <p class="text-sm text-slate-500 mt-2">追踪手动分析任务与报告。</p>
         </a>
-        <a href="/glossary" class="glass rounded-2xl p-8 text-center hover:shadow-xl transition-all hover:-translate-y-1">
-            <div class="text-4xl mb-3">📚</div>
-            <h3 class="text-lg font-bold text-gray-900 mb-2">名词解释</h3>
-            <p class="text-sm text-gray-500">报告术语白话解释，方向说明一目了然</p>
+        <a href="/glossary" class="surface-card rounded-3xl p-6 hover:-translate-y-1 hover:shadow-2xl transition-all block">
+            <div class="flex items-center justify-between"><h3 class="text-xl font-black text-slate-950">名词解释</h3><span class="text-blue-600 font-bold">查看</span></div>
+            <p class="text-sm text-slate-500 mt-2">理解估值、风险和资金指标。</p>
         </a>
+    </div>
     </div>
 
 </div>
