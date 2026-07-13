@@ -174,6 +174,8 @@ def _generate_recommendations(
             "强推荐": STRONG_RECOMMEND_LIMIT,
             "推荐": RECOMMEND_LIMIT,
             "观察": OBSERVE_LIMIT,
+            # 成功分析后仍应给出可读候选；谨慎项保留在末档，便于用户看到原因。
+            "谨慎": OBSERVE_LIMIT,
         }
         level_counts = {level: 0 for level in level_limits}
         sector_picks: Dict[str, List[dict]] = {}
@@ -342,7 +344,11 @@ def _write_batch_report(
         for item in recommendations
         if item.get("skipped")
     ]
-    not_selected_rows = [row for row in task_rows if row["recommendation_level"] in ("谨慎", "回避")] + skipped_rows
+    selected_tickers = {rec.get("ticker") for rec in rec_rows if rec.get("ticker")}
+    not_selected_rows = [
+        row for row in task_rows
+        if row["ticker"] not in selected_tickers and row["recommendation_level"] in ("谨慎", "回避")
+    ] + skipped_rows
     not_selected_html = "".join(
         f"""
         <tr>
@@ -409,7 +415,7 @@ def _write_batch_report(
     </section>
     <section class="card">
       <h2>筛选规则说明</h2>
-      <p class="note">系统先按三池模型生成每日约 {DAILY_ANALYSIS_TARGET_COUNT} 只候选股票：动量池捕捉市场热点，质量池用免费行情数据代理中长期候选，轮动池补充近期未分析股票。分析完成后按基本面、估值、成长、资金、趋势、风险、催化七类因子生成最终推荐分，并标记数据完整度 A/B/C/D。最终展示名额为强推荐 {STRONG_RECOMMEND_LIMIT} 只、推荐 {RECOMMEND_LIMIT} 只、观察 {OBSERVE_LIMIT} 只。</p>
+      <p class="note">系统先按三池模型生成每日约 {DAILY_ANALYSIS_TARGET_COUNT} 只候选股票：动量池捕捉市场热点，质量池用免费行情数据代理中长期候选，轮动池补充近期未分析股票。分析完成后按基本面、估值、成长、资金、趋势、风险、催化七类因子生成最终推荐分，并标记数据完整度 A/B/C/D。最终展示名额为强推荐 {STRONG_RECOMMEND_LIMIT} 只、推荐 {RECOMMEND_LIMIT} 只、观察 {OBSERVE_LIMIT} 只；当候选整体偏弱时，谨慎项作为末档候选展示。</p>
     </section>
     <section class="card">
       <h2>最终推荐</h2>

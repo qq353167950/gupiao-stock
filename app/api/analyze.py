@@ -4,6 +4,7 @@ from typing import Optional, List
 from sqlalchemy.orm import Session
 from app.auth import require_user
 from app.database import get_db, AnalysisTask, DailyRecommendation, User
+from app.recommendation_engine import evaluate_recommendation
 from app.task_manager import create_task, get_task_status
 from app.config import ANALYSIS_DEPTHS, now_cn
 
@@ -133,10 +134,17 @@ async def get_recommendations(rec_type: str = "all", db: Session = Depends(get_d
         # 补充增强分析结果
         task = latest_task_map.get(rec.ticker)
         if task:
+            evaluation = evaluate_recommendation(task)
+            rec_dict['task_id'] = task.task_id
+            rec_dict['report_url'] = f"/reports/{task.report_path}" if task.report_path else None
             rec_dict['composite_score'] = task.composite_score
             rec_dict['risk_level'] = task.risk_level
-        rec_dict['recommendation_level'] = (rec.reason or '').split(' · ')[1] if rec.reason and ' · ' in rec.reason else ''
-        rec_dict['data_quality'] = ''
+            rec_dict['recommendation_level'] = evaluation["recommendation_level"]
+            rec_dict['data_quality'] = evaluation["data_quality"]
+            rec_dict['factor_scores'] = evaluation["factor_scores"]
+        else:
+            rec_dict['recommendation_level'] = (rec.reason or '').split(' · ')[1] if rec.reason and ' · ' in rec.reason else ''
+            rec_dict['data_quality'] = ''
 
         sectors[sector].append(rec_dict)
 

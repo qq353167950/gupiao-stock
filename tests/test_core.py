@@ -96,8 +96,8 @@ def test_config_concurrency_positive():
         OBSERVE_LIMIT,
     )
     assert MAX_CONCURRENT_TASKS >= 3
-    assert STOCKS_PER_SECTOR >= 9
-    assert DAILY_ANALYSIS_TARGET_COUNT == 50
+    assert STOCKS_PER_SECTOR >= 18
+    assert DAILY_ANALYSIS_TARGET_COUNT == 100
     assert SHORT_TERM_WEIGHT == 70
     assert MID_TERM_WEIGHT == 30
     assert STRONG_RECOMMEND_LIMIT == 5
@@ -885,6 +885,76 @@ def test_recommendation_global_dedup_logic():
     assert "002230.SZ" in picks["软件互联网"][0]["ticker"]  # 归入先到达的板块
     assert all(i["ticker"] != "002230.SZ" for i in picks.get("人工智能", []))
     assert len(picks["软件互联网"]) == 2  # 板块上限仍生效
+
+
+def test_generate_recommendations_keeps_cautious_candidates():
+    """只有谨慎候选时也应写入末档推荐，避免成功分析后推送空结果"""
+    import app.stock_pool as stock_pool_mod
+    import auto_analyze_and_recommend as aar
+
+    class FakeTask:
+        task_id = "task-1"
+        ticker = "600519.SH"
+        name = "贵州茅台"
+        status = "completed"
+        score = 90.0
+        composite_score = 90.0
+        dcf_discount = 0.5
+        bullish_count = 40
+        total_voters = 50
+        risk_level = "极高风险"
+        enhanced_result = '{"trap_detection":{"trap_score":9},"lhb_analysis":{"recent_lhb_count":3,"main_money":"机构主导"}}'
+        report_path = "x/full-report-standalone.html"
+
+    class FakeDeleteQuery:
+        def filter(self, *args, **kwargs):
+            return self
+
+        def delete(self):
+            return 0
+
+    class FakeTaskQuery:
+        def filter(self, *args, **kwargs):
+            return self
+
+        def all(self):
+            return [FakeTask()]
+
+    class FakeDB:
+        def __init__(self):
+            self.added = []
+
+        def query(self, *args, **kwargs):
+            if args and args[0] is aar.DailyRecommendation:
+                return FakeDeleteQuery()
+            return FakeTaskQuery()
+
+        def add(self, item):
+            self.added.append(item)
+
+        def commit(self):
+            pass
+
+        def close(self):
+            pass
+
+    fake_db = FakeDB()
+    original_pool = stock_pool_mod.A_STOCK_POOL
+    original_session = aar.SessionLocal
+    try:
+        stock_pool_mod.A_STOCK_POOL = {"白酒": ["600519.SH"]}
+        aar.SessionLocal = lambda: fake_db
+        result = aar._generate_recommendations(
+            [{"task_id": "task-1", "ticker": "600519.SH", "name": "贵州茅台"}],
+            "2026-07-14",
+            "morning",
+        )
+    finally:
+        stock_pool_mod.A_STOCK_POOL = original_pool
+        aar.SessionLocal = original_session
+
+    assert result["白酒"][0]["recommendation_level"] == "谨慎"
+    assert len(fake_db.added) == 1
 
 
 # ─── 独立执行入口 ───

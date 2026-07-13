@@ -38,7 +38,7 @@
 
 ```
 15:10 收盘后（交易日）
-  → 三池选股（动量池 + 质量池 + 轮动池，每日默认约 50 只）
+  → 三池选股（动量池 + 质量池 + 轮动池，每日默认约 100 只）
   → 并发批量分析（默认并发 3，standard 深度约 25 分钟/只）
   → 全部完成后按多因子模型生成次日推荐、数据完整度、未入选原因 + 立即推送分析摘要
 08:20 开盘前（交易日）
@@ -142,8 +142,8 @@ venv/bin/python auto_analyze_and_recommend.py quick morning
 | 环境变量 | 默认 | 说明 |
 |---|---|---|
 | `MAX_CONCURRENT_TASKS` | 3 | 批量并发分析数（每任务约占 300-500MB 内存）|
-| `DAILY_ANALYSIS_TARGET_COUNT` | 50 | 每日批量分析目标股票数 |
-| `STOCKS_PER_SECTOR` | 9 | 兼容旧配置：每大板块候选数（×6 板块）|
+| `DAILY_ANALYSIS_TARGET_COUNT` | 100 | 每日批量分析目标股票数 |
+| `STOCKS_PER_SECTOR` | 18 | 兼容旧配置：每大板块候选数（×6 板块）|
 | `RECOMMENDATION_STYLE` | short_mid | 推荐风格：短中线 |
 | `SHORT_TERM_WEIGHT` | 70 | 短线权重 |
 | `MID_TERM_WEIGHT` | 30 | 中线权重 |
