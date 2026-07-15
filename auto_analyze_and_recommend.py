@@ -115,8 +115,12 @@ def _generate_recommendations(
 
     全局去重：股票池中 6 只股票横跨两个细分板块（如科大讯飞属"软件互联网"+"人工智能"），
     先按全板块候选统一排序，每只股票只归入其排名最先出现的板块，避免重复推荐。
+
+    候选来源为任务驱动（而非股票池驱动）：直接收集所有 completed 分析任务，
+    板块由 get_stock_category 反查（不在固定池中的全市场海选股票归入「其他」），
+    使全市场海选与固定股票池两种选股模式都能走通同一套推荐生成。
     """
-    from app.stock_pool import A_STOCK_POOL
+    from app.stock_pool import get_stock_category, A_STOCK_POOL
 
     db = SessionLocal()
     try:
@@ -129,39 +133,36 @@ def _generate_recommendations(
 
         batch_task_ids = [t['task_id'] for t in analysis_tasks]
 
-        # 第一遍：收集各细分板块的候选（含评分），暂不写库
+        # 第一遍：收集全部 completed 任务作为候选（含评分），按板块归类，暂不写库
+        completed_tasks = db.query(AnalysisTask).filter(
+            AnalysisTask.task_id.in_(batch_task_ids),
+            AnalysisTask.status == "completed"
+        ).all() if batch_task_ids else []
+
         sector_candidates: Dict[str, List[dict]] = {}
-        for sub_sector, stocks_in_pool in A_STOCK_POOL.items():
-            sub_sector_task_ids = [
-                t['task_id'] for t in analysis_tasks if t['ticker'] in stocks_in_pool
-            ]
-            if not sub_sector_task_ids:
+        for task in completed_tasks:
+            composite_score, reason, period = calculate_composite_score(task)
+            evaluation = evaluate_recommendation(task)
+            if evaluation["recommendation_level"] == "回避":
                 continue
-
-            sub_sector_tasks = db.query(AnalysisTask).filter(
-                AnalysisTask.task_id.in_(sub_sector_task_ids),
-                AnalysisTask.status == "completed"
-            ).all()
-            if not sub_sector_tasks:
-                continue
-
-            scored = []
-            for task in sub_sector_tasks:
-                composite_score, reason, period = calculate_composite_score(task)
-                evaluation = evaluate_recommendation(task)
-                if evaluation["recommendation_level"] == "回避":
-                    continue
-                scored.append({
-                    "task": task,
-                    "score": composite_score,
-                    "reason": reason,
-                    "period": period,
-                    "evaluation": evaluation,
-                })
+            sub_sector = get_stock_category(task.ticker)  # 不在池中返回「其他」
+            sector_candidates.setdefault(sub_sector, []).append({
+                "task": task,
+                "score": composite_score,
+                "reason": reason,
+                "period": period,
+                "evaluation": evaluation,
+            })
+        for scored in sector_candidates.values():
             scored.sort(key=lambda x: x["score"], reverse=True)
-            sector_candidates[sub_sector] = scored
 
-        # 第二遍：按候选评分从高到低全局去重，再按推荐层级名额截断。
+        # 第二遍：全局去重后按评分从高到低做「相对排名 Top-K」分配。
+        #
+        # 关键改动：不再用每只股票自身的绝对层级（强推荐/推荐/观察）去卡名额——
+        # 那样行情整体偏弱时所有股票层级都低、名额填不满导致零推荐。改为按排名
+        # 从高到低填满设定名额：健康候选优先占据 强推荐→推荐→观察 三档；健康候选
+        # 不足时，用谨慎候选（高风险/极高风险，带风险标记）回填剩余观察位，
+        # 保证「每天尽量填满设定数量」。回避（分析基本失败）的候选已在第一遍剔除。
         all_candidates = [
             (sub_sector, item)
             for sub_sector, items in sector_candidates.items()
@@ -169,49 +170,82 @@ def _generate_recommendations(
         ]
         all_candidates.sort(key=lambda x: x[1]["score"], reverse=True)
 
+        # 全局去重：同一股票横跨多个细分板块时只归入排名最先出现的板块
         used_tickers = set()
-        level_limits = {
-            "强推荐": STRONG_RECOMMEND_LIMIT,
-            "推荐": RECOMMEND_LIMIT,
-            "观察": OBSERVE_LIMIT,
-            # 成功分析后仍应给出可读候选；谨慎项保留在末档，便于用户看到原因。
-            "谨慎": OBSERVE_LIMIT,
-        }
-        level_counts = {level: 0 for level in level_limits}
-        sector_picks: Dict[str, List[dict]] = {}
-        skipped_candidates = []
+        deduped = []
         for sub_sector, item in all_candidates:
             ticker = item["task"].ticker
             if ticker in used_tickers:
                 continue
             used_tickers.add(ticker)
-            level = item["evaluation"]["recommendation_level"]
-            if level not in level_limits:
-                skipped_candidates.append({
-                    "ticker": ticker,
-                    "name": format_stock_display_name(item["task"].name, ticker),
-                    "score": item["score"],
-                    "level": level,
-                    "reason": item["evaluation"].get("exclude_reason") or "层级未进入展示范围",
-                })
-                continue
-            if level_counts[level] >= level_limits[level]:
-                skipped_candidates.append({
-                    "ticker": ticker,
-                    "name": format_stock_display_name(item["task"].name, ticker),
-                    "score": item["score"],
-                    "level": level,
-                    "reason": f"{level}名额已满",
-                })
-                continue
-            picks = sector_picks.setdefault(sub_sector, [])
-            picks.append(item)
-            level_counts[level] += 1
+            deduped.append((sub_sector, item))
 
-        # 第三遍：按板块写库（保持 A_STOCK_POOL 定义顺序，排名连续）
+        # 健康候选（可进入强推荐/推荐/观察）与谨慎候选（高风险，仅回填观察末档）分流
+        healthy = [
+            (s, it) for s, it in deduped
+            if it["evaluation"]["recommendation_level"] != "谨慎"
+        ]
+        cautious = [
+            (s, it) for s, it in deduped
+            if it["evaluation"]["recommendation_level"] == "谨慎"
+        ]
+
+        # 三档展示名额（顺序即优先级）：按排名从高到低逐一分配
+        display_tiers = [
+            ("强推荐", STRONG_RECOMMEND_LIMIT),
+            ("推荐", RECOMMEND_LIMIT),
+            ("观察", OBSERVE_LIMIT),
+        ]
+        total_slots = sum(limit for _, limit in display_tiers)
+
+        sector_picks: Dict[str, List[dict]] = {}
+        skipped_candidates = []
+
+        def _assign(sub_sector: str, item: dict, display_level: str):
+            """把候选写入选中集合，并记录其相对排名分配到的展示层级。"""
+            item["display_level"] = display_level
+            sector_picks.setdefault(sub_sector, []).append(item)
+
+        def _skip(item: dict, reason: str):
+            skipped_candidates.append({
+                "ticker": item["task"].ticker,
+                "name": format_stock_display_name(item["task"].name, item["task"].ticker),
+                "score": item["score"],
+                "level": item["evaluation"]["recommendation_level"],
+                "reason": reason,
+            })
+
+        # 三档剩余名额计数（按排名从高到低消耗）
+        tier_remaining = {name: limit for name, limit in display_tiers}
+
+        # 1) 健康候选按排名填 强推荐→推荐→观察：占满前一档才进入下一档，
+        #    保证「强推荐 N 只、推荐 M 只、观察 K 只」的设定数量尽量填满。
+        for sub_sector, item in healthy:
+            target_tier = next(
+                (name for name, _ in display_tiers if tier_remaining[name] > 0), None
+            )
+            if target_tier is None:
+                _skip(item, "展示名额已满（排名靠后）")
+                continue
+            _assign(sub_sector, item, target_tier)
+            tier_remaining[target_tier] -= 1
+
+        # 2) 谨慎候选（高风险/极高风险）只回填「观察」档剩余名额，且保留「谨慎」
+        #    标签不改写为「观察」——既补足数量，又不隐藏风险提示。
+        for sub_sector, item in cautious:
+            if tier_remaining["观察"] > 0:
+                _assign(sub_sector, item, "谨慎")
+                tier_remaining["观察"] -= 1
+            else:
+                _skip(item, "观察名额已满")
+
+        # 第三遍：按板块写库（先按 A_STOCK_POOL 定义顺序，池外板块如"其他"排在最后）
         sub_sector_recommendations: Dict[str, List[dict]] = {}
         global_rank = 1
-        for sub_sector in A_STOCK_POOL:
+        ordered_sectors = list(A_STOCK_POOL) + [
+            s for s in sector_picks if s not in A_STOCK_POOL
+        ]
+        for sub_sector in ordered_sectors:
             picks = sector_picks.get(sub_sector)
             if not picks:
                 continue
@@ -226,6 +260,8 @@ def _generate_recommendations(
 
                 reason_text = f"{item['period']} · {item['reason']}"
                 evaluation = item["evaluation"]
+                # 展示层级用相对排名分配的 display_level（缺省回落到评估层级）
+                display_level = item.get("display_level") or evaluation["recommendation_level"]
 
                 recommendation = DailyRecommendation(
                     date=target_date,
@@ -249,7 +285,8 @@ def _generate_recommendations(
                     'reason': reason_text,
                     'sector': sub_sector,
                     'risk_level': task.risk_level,
-                    'recommendation_level': evaluation["recommendation_level"],
+                    'recommendation_level': display_level,
+                    'quality_signal': evaluation["recommendation_level"],
                     'data_quality': evaluation["data_quality"],
                     'factor_scores': evaluation["factor_scores"],
                 })
@@ -483,17 +520,41 @@ async def auto_analyze_and_recommend(
         target_date = resume_state.get("target_date") or _determine_target_date()
         print(f"✓ 恢复 {len(flat_stocks)} 只股票（目标日期 {target_date}）\n")
     else:
-        # 1. 获取热门股票（同步 requests 逐批抓取耗时数十秒，放线程池避免阻塞事件循环）
+        # 1. 获取候选股票（同步 requests 抓取耗时数十秒，放线程池避免阻塞事件循环）
         # 惰性导入：market_data 依赖 pandas，续跑路径与测试环境无需加载
-        from app.market_data import get_sector_hot_stocks
+        from app.config import USE_WHOLE_MARKET_SCREENING
 
-        print("📊 步骤1：获取市场热门股票...")
-        sector_stocks = await loop.run_in_executor(
-            None, lambda: get_sector_hot_stocks(
-                top_n_per_major_sector=STOCKS_PER_SECTOR,
-                target_total=DAILY_ANALYSIS_TARGET_COUNT,
+        if USE_WHOLE_MARKET_SCREENING:
+            # 全市场海选：拉全市场行情，用纯行情指标预筛出 Top N 候选，
+            # 覆盖面远大于固定股票池，契合「尽量多的股票里找数据好的」
+            from app.market_data import get_whole_market_candidates
+
+            print(f"📊 步骤1：全市场海选（目标 {DAILY_ANALYSIS_TARGET_COUNT} 只）...")
+            sector_stocks = await loop.run_in_executor(
+                None, lambda: get_whole_market_candidates(
+                    target_total=DAILY_ANALYSIS_TARGET_COUNT,
+                )
             )
-        )
+            # 海选失败时降级到固定股票池，保证流程不中断
+            if not sector_stocks:
+                print("⚠️  全市场海选无结果，降级使用固定股票池")
+                from app.market_data import get_sector_hot_stocks
+                sector_stocks = await loop.run_in_executor(
+                    None, lambda: get_sector_hot_stocks(
+                        top_n_per_major_sector=STOCKS_PER_SECTOR,
+                        target_total=DAILY_ANALYSIS_TARGET_COUNT,
+                    )
+                )
+        else:
+            from app.market_data import get_sector_hot_stocks
+
+            print("📊 步骤1：获取市场热门股票（固定股票池）...")
+            sector_stocks = await loop.run_in_executor(
+                None, lambda: get_sector_hot_stocks(
+                    top_n_per_major_sector=STOCKS_PER_SECTOR,
+                    target_total=DAILY_ANALYSIS_TARGET_COUNT,
+                )
+            )
 
         if not sector_stocks:
             print("⚠️  未能选出热门股票，流程终止")

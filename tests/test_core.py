@@ -957,6 +957,99 @@ def test_generate_recommendations_keeps_cautious_candidates():
     assert len(fake_db.added) == 1
 
 
+def test_generate_recommendations_rank_based_fills_quota():
+    """相对排名 Top-K：即使所有候选分数平庸（没有一只达到旧的强推荐绝对阈值），
+    也应按排名从高到低填满设定名额，保证「每天必出推荐」。"""
+    import app.stock_pool as stock_pool_mod
+    import auto_analyze_and_recommend as aar
+
+    # 造 8 只中等偏弱的健康股票（低风险，但体检分中等、无 DCF/龙虎榜数据），
+    # 这类股票在旧逻辑里会因绝对分不够而全部落榜 → 零推荐。
+    class FakeTask:
+        def __init__(self, i):
+            self.task_id = f"task-{i}"
+            self.ticker = f"6000{i:02d}.SH"
+            self.name = f"样本{i}"
+            self.status = "completed"
+            self.score = None            # 无独立体检分
+            self.composite_score = 55.0 + i  # 55~62，中等偏弱
+            self.dcf_discount = None     # 无 DCF
+            self.bullish_count = None    # 无评委投票
+            self.total_voters = None
+            self.risk_level = "🟡 中风险"
+            self.enhanced_result = '{"trap_detection":{"trap_score":8}}'
+            self.report_path = "x/full-report-standalone.html"
+
+    tasks = [FakeTask(i) for i in range(8)]
+
+    class FakeDeleteQuery:
+        def filter(self, *a, **k):
+            return self
+
+        def delete(self):
+            return 0
+
+    class FakeTaskQuery:
+        def filter(self, *a, **k):
+            return self
+
+        def all(self):
+            return tasks
+
+    class FakeDB:
+        def __init__(self):
+            self.added = []
+
+        def query(self, *a, **k):
+            if a and a[0] is aar.DailyRecommendation:
+                return FakeDeleteQuery()
+            return FakeTaskQuery()
+
+        def add(self, item):
+            self.added.append(item)
+
+        def commit(self):
+            pass
+
+        def close(self):
+            pass
+
+    fake_db = FakeDB()
+    original_pool = stock_pool_mod.A_STOCK_POOL
+    original_session = aar.SessionLocal
+    original_strong = aar.STRONG_RECOMMEND_LIMIT
+    original_rec = aar.RECOMMEND_LIMIT
+    original_obs = aar.OBSERVE_LIMIT
+    try:
+        stock_pool_mod.A_STOCK_POOL = {"白酒": [t.ticker for t in tasks]}
+        aar.SessionLocal = lambda: fake_db
+        # 名额设小便于断言：强推荐 2 / 推荐 3 / 观察 3，共 8 位刚好容纳 8 只
+        aar.STRONG_RECOMMEND_LIMIT = 2
+        aar.RECOMMEND_LIMIT = 3
+        aar.OBSERVE_LIMIT = 3
+        result = aar._generate_recommendations(
+            [{"task_id": t.task_id, "ticker": t.ticker, "name": t.name} for t in tasks],
+            "2026-07-14",
+            "morning",
+        )
+    finally:
+        stock_pool_mod.A_STOCK_POOL = original_pool
+        aar.SessionLocal = original_session
+        aar.STRONG_RECOMMEND_LIMIT = original_strong
+        aar.RECOMMEND_LIMIT = original_rec
+        aar.OBSERVE_LIMIT = original_obs
+
+    picks = result.get("白酒", [])
+    levels = [p["recommendation_level"] for p in picks]
+    # 核心断言：名额被填满，且按排名分配出各档（不再零推荐）
+    assert len(fake_db.added) == 8
+    assert levels.count("强推荐") == 2
+    assert levels.count("推荐") == 3
+    assert levels.count("观察") == 3
+    # 分数最高者排在最前且是强推荐（composite_score 越大 i 越大）
+    assert picks[0]["recommendation_level"] == "强推荐"
+
+
 # ─── 独立执行入口 ───
 
 if __name__ == "__main__":

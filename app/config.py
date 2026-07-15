@@ -140,6 +140,9 @@ MAX_CONCURRENT_TASKS = _env_int("MAX_CONCURRENT_TASKS", 3)  # 批量分析（定
 MANUAL_CONCURRENT_TASKS = _env_int("MANUAL_CONCURRENT_TASKS", 2)  # Web 手动分析最大并发数（与批量通道独立）
 DAILY_ANALYSIS_TARGET_COUNT = _env_int("DAILY_ANALYSIS_TARGET_COUNT", 100)  # 每日批量分析目标股票数
 STOCKS_PER_SECTOR = _env_int("STOCKS_PER_SECTOR", 18)  # 兼容旧配置：每大板块候选数（6 × 18 ≈ 100）
+# 选股来源：True=全市场海选（东财拉全市场→纯行情预筛 Top N），False=固定股票池三池选股。
+# 默认开启，契合「尽量多的股票里找出数据好的」——行情获取失败时自动回退固定池。
+USE_WHOLE_MARKET_SCREENING = _env_bool("WHOLE_MARKET_SCREENING", True)
 RECOMMENDATION_STYLE = os.getenv("RECOMMENDATION_STYLE", "short_mid").strip().lower()  # short/mid/short_mid/balanced
 RECOMMENDATION_RISK_APPETITE = os.getenv("RECOMMENDATION_RISK_APPETITE", "aggressive").strip().lower()  # conservative/balanced/aggressive
 SHORT_TERM_WEIGHT = _env_int("SHORT_TERM_WEIGHT", 70)  # 短线偏好权重

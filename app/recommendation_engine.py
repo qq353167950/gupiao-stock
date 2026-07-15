@@ -55,15 +55,33 @@ def _score_data_quality(task: AnalysisTask) -> Tuple[str, int, list]:
     return "D", 35, missing
 
 
-def _level_from_score(score: float, risk_level: Optional[str], data_quality: str) -> str:
+def _level_thresholds() -> Tuple[float, float, float]:
+    """按风险偏好返回 (强推荐, 推荐, 观察) 的分数阈值。"""
     if RECOMMENDATION_RISK_APPETITE == "aggressive":
-        strong_threshold, recommend_threshold, observe_threshold = 75, 65, 55
-    elif RECOMMENDATION_RISK_APPETITE == "conservative":
-        strong_threshold, recommend_threshold, observe_threshold = 85, 75, 65
-    else:
-        strong_threshold, recommend_threshold, observe_threshold = 80, 70, 60
+        return 72.0, 60.0, 50.0
+    if RECOMMENDATION_RISK_APPETITE == "conservative":
+        return 82.0, 72.0, 62.0
+    return 78.0, 68.0, 58.0
 
-    if data_quality == "D" or score < 50:
+
+def _level_from_score(score: float, risk_level: Optional[str], data_quality: str) -> str:
+    """按绝对分给出质量标签。
+
+    注意：这是"质量信号"而非最终展示层级——最终强推荐/推荐/观察的名额
+    由 auto_analyze_and_recommend._generate_recommendations 按相对排名分配，
+    保证每天都能填满设定数量。此处只负责识别"必须排除/必须谨慎"的硬约束，
+    以及在直接调用（如单股评估）时给出可读的质量分层。
+
+    硬约束（不受相对排名影响）：
+    - 数据完整度 D（分析基本失败）→ 回避
+    - 极高风险 → 谨慎
+    - 高风险且非激进偏好 → 谨慎
+    """
+    strong_threshold, recommend_threshold, observe_threshold = _level_thresholds()
+
+    # 只有分析基本失败（D 级）才直接回避；不再用 score<50 一刀切，
+    # 避免行情整体偏弱时把所有股票判为回避导致零推荐。
+    if data_quality == "D":
         return "回避"
     if risk_level and "极高风险" in risk_level:
         return "谨慎"
@@ -136,33 +154,97 @@ def evaluate_recommendation(task: AnalysisTask) -> Dict[str, Any]:
     risk_weight = mixed_weight("risk")
     catalyst_weight = mixed_weight("catalyst")
 
-    fundamental = min(fundamental_weight, deep_score * (fundamental_weight / 100.0))
-    valuation = max(0.0, min(valuation_weight, dcf_discount * (valuation_weight * 2.5))) if task.dcf_discount is not None else valuation_weight * 0.4
-    growth = min(growth_weight, max(0.0, (deep_score - 45.0) * (growth_weight / 43.0))) if task.score is not None else growth_weight * 0.4
-    capital = min(capital_weight, bullish_ratio * (capital_weight * 0.55) + min(capital_weight * 0.35, lhb_count * 2.0))
-    if "机构主导" in main_money:
-        capital += 2.0
-    elif "游资主导" in main_money:
-        capital += 1.0
-    elif "资金流出" in main_money:
-        capital -= 3.0
-    capital = max(0.0, min(capital_weight, capital))
-    trend = min(trend_weight, trend_weight * 0.35 + min(trend_weight * 0.4, lhb_count * 1.8) + (trend_weight * 0.25 if bullish_ratio >= 0.45 else 0.0))
-    risk = max(0.0, min(risk_weight, trap_score * (risk_weight / 10.0)))
-    catalyst = 0.0
-    if lhb_count > 0:
-        catalyst += min(3.0, lhb_count)
-    if bullish_ratio >= 0.5:
-        catalyst += 2.0
-    catalyst = min(catalyst_weight, catalyst)
+    # ─── 因子归一化（0-1）+ 可得性标记 ───
+    # 关键设计：稀缺数据（DCF / 龙虎榜 / 评委投票）缺失时，该因子标记为「不可得」，
+    # 不再按 0 分计入——只在「可得因子」范围内按权重归一化。避免普通个股因天然
+    # 缺少这些数据而被系统性压低分数、最终全部落入「回避」。
+    has_dcf = task.dcf_discount is not None
+    has_own_score = task.score is not None
+    has_bullish = task.bullish_count is not None and bool(task.total_voters)
+    has_lhb = bool(lhb) and lhb.get("recent_lhb_count") is not None
+    has_capital_signal = has_bullish or (has_lhb and lhb_count > 0)
+    has_trap = bool(trap) and trap.get("trap_score") is not None
 
-    raw_score = fundamental + valuation + growth + capital + trend + risk + catalyst
+    # fundamental：体检分/综合分驱动，几乎总是可得（分析完成即有 composite_score）
+    fundamental_ratio = max(0.0, min(1.0, deep_score / 100.0))
+
+    # valuation：DCF 折价驱动，仅在有 DCF 时可得
+    valuation_ratio = max(0.0, min(1.0, dcf_discount * 2.5)) if has_dcf else None
+
+    # growth：体检分相对成长空间，仅在有独立体检分时可得
+    growth_ratio = max(0.0, min(1.0, (deep_score - 45.0) / 40.0)) if has_own_score else None
+
+    # capital：评委看多 + 龙虎榜资金，两者皆无则不可得
+    if has_capital_signal:
+        capital_ratio = bullish_ratio * 0.7 + min(0.3, lhb_count * 0.1)
+        if "机构主导" in main_money:
+            capital_ratio += 0.1
+        elif "游资主导" in main_money:
+            capital_ratio += 0.05
+        elif "资金流出" in main_money:
+            capital_ratio -= 0.15
+        capital_ratio = max(0.0, min(1.0, capital_ratio))
+    else:
+        capital_ratio = None
+
+    # trend：龙虎榜活跃度 + 看多共识，两者皆无则不可得
+    if has_capital_signal:
+        trend_ratio = 0.35 + min(0.4, lhb_count * 0.12) + (0.25 if bullish_ratio >= 0.45 else 0.0)
+        trend_ratio = max(0.0, min(1.0, trend_ratio))
+    else:
+        trend_ratio = None
+
+    # risk：trap-detector 风险信号，有默认安全兜底，通常可得
+    risk_ratio = max(0.0, min(1.0, trap_score / 10.0)) if has_trap else None
+
+    # catalyst：龙虎榜上榜 + 看多，两者皆无则不可得
+    if has_capital_signal:
+        catalyst_ratio = min(1.0, lhb_count * 0.25 + (0.3 if bullish_ratio >= 0.5 else 0.0))
+    else:
+        catalyst_ratio = None
+
+    ratio_by_key = {
+        "fundamental": fundamental_ratio,
+        "valuation": valuation_ratio,
+        "growth": growth_ratio,
+        "capital": capital_ratio,
+        "trend": trend_ratio,
+        "risk": risk_ratio,
+        "catalyst": catalyst_ratio,
+    }
+    weight_by_key = {
+        "fundamental": fundamental_weight,
+        "valuation": valuation_weight,
+        "growth": growth_weight,
+        "capital": capital_weight,
+        "trend": trend_weight,
+        "risk": risk_weight,
+        "catalyst": catalyst_weight,
+    }
+
+    # 仅在可得因子范围内加权归一化 → 0-100
+    available_weight = sum(weight_by_key[k] for k, r in ratio_by_key.items() if r is not None)
+    if available_weight > 0:
+        weighted = sum(
+            weight_by_key[k] * r for k, r in ratio_by_key.items() if r is not None
+        )
+        factor_composite = weighted / available_weight * 100.0
+    else:
+        factor_composite = deep_score
+
+    # 与 enhanced_analyzer 已算好的综合分融合：因子模型为主(0.55)、综合分为锚(0.45)。
+    # 综合分只要分析成功即有值，为分数提供稳定基准，避免单纯因子模型在数据稀疏时漂移。
+    anchor_score = _safe_float(task.composite_score, deep_score)
+    raw_score = 0.55 * factor_composite + 0.45 * anchor_score
+
     penalties = []
+    # 数据完整度惩罚保留但大幅收敛：可得因子归一化已消化了「缺数据」的影响，
+    # 这里只做温和提示性扣分，不再把股票直接打到推荐线以下。
     if data_quality == "C":
-        raw_score -= 4 if RECOMMENDATION_RISK_APPETITE == "aggressive" else 6
+        raw_score -= 2 if RECOMMENDATION_RISK_APPETITE == "aggressive" else 4
         penalties.append("核心数据不完整")
     elif data_quality == "D":
-        raw_score -= 16 if RECOMMENDATION_RISK_APPETITE == "aggressive" else 20
+        raw_score -= 8 if RECOMMENDATION_RISK_APPETITE == "aggressive" else 12
         penalties.append("关键数据缺失")
     if task.risk_level and "极高风险" in task.risk_level:
         raw_score -= 20
@@ -174,19 +256,28 @@ def evaluate_recommendation(task: AnalysisTask) -> Dict[str, Any]:
         raw_score -= 8
         penalties.append("体检分偏低")
 
+    # 因子实际得分（用于展示与解释，缺失因子记 0 便于前端对齐 7 列）
+    fundamental = fundamental_ratio * fundamental_weight
+    valuation = (valuation_ratio or 0.0) * valuation_weight
+    growth = (growth_ratio or 0.0) * growth_weight
+    capital = (capital_ratio or 0.0) * capital_weight
+    trend = (trend_ratio or 0.0) * trend_weight
+    risk = (risk_ratio or 0.0) * risk_weight
+    catalyst = (catalyst_ratio or 0.0) * catalyst_weight
+
     final_score = round(max(0.0, min(100.0, raw_score)), 1)
     level = _level_from_score(final_score, task.risk_level, data_quality)
 
     include_reason = []
-    if fundamental >= fundamental_weight * 0.72:
+    if fundamental_ratio >= 0.72:
         include_reason.append("基本面质量较好")
-    if valuation >= valuation_weight * 0.6:
+    if valuation_ratio is not None and valuation_ratio >= 0.6:
         include_reason.append(f"估值具备安全边际({int(dcf_discount * 100)}%)")
-    if capital >= capital_weight * 0.5:
+    if capital_ratio is not None and capital_ratio >= 0.5:
         include_reason.append("资金认可度较高")
-    if trend >= trend_weight * 0.65:
+    if trend_ratio is not None and trend_ratio >= 0.65:
         include_reason.append("趋势与活跃度较好")
-    if risk >= risk_weight * 0.72:
+    if risk_ratio is not None and risk_ratio >= 0.72:
         include_reason.append("风险信号可控")
 
     exclude_reason = None
