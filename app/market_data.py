@@ -252,6 +252,180 @@ def select_stocks_by_rotation(sector_stocks: List[str], df: pd.DataFrame,
         return []
 
 
+def get_whole_market_realtime_eastmoney(max_pages: int = 60, page_size: int = 100) -> pd.DataFrame:
+    """拉取全市场 A 股实时行情（东财 clist 接口，覆盖沪深主板/创业板/科创板）。
+
+    与固定股票池的腾讯接口互补：这里不预设股票清单，直接分页拉全市场几千只股票，
+    用于「尽量多的股票里海选」。字段与 get_a_share_realtime_tencent 对齐（code/name/
+    price/change_pct/volume/amount，另含 turnover 换手率），供预筛复用同一套逻辑。
+
+    Args:
+        max_pages: 最大翻页数（page_size=100 时 60 页≈6000 只，足够覆盖全市场）
+        page_size: 每页数量
+    """
+    # fs 过滤：m:0 t:6 深主板, m:0 t:80 创业板, m:1 t:2 沪主板, m:1 t:23 科创板
+    fs = "m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23"
+    # 字段：f12 代码 f14 名称 f2 最新价 f3 涨跌幅 f5 成交量(手) f6 成交额(元) f8 换手率
+    fields = "f12,f14,f2,f3,f5,f6,f8"
+    base_url = "https://push2.eastmoney.com/api/qt/clist/get"
+
+    results = []
+    print(f"正在从东财拉取全市场 A 股行情（最多 {max_pages} 页）...")
+    for page in range(1, max_pages + 1):
+        params = {
+            "pn": page,
+            "pz": page_size,
+            "po": 1,
+            "np": 1,
+            "fltt": 2,
+            "invt": 2,
+            "fid": "f6",  # 按成交额排序：靠前页即为高流动性股票
+            "fs": fs,
+            "fields": fields,
+        }
+        try:
+            r = requests.get(base_url, params=params, timeout=10,
+                             headers={"User-Agent": "Mozilla/5.0"})
+            if r.status_code != 200:
+                print(f"  第 {page} 页 HTTP {r.status_code}，停止翻页")
+                break
+            payload = r.json()
+            diff = (payload.get("data") or {}).get("diff")
+            if not diff:
+                break  # 无更多数据
+
+            # diff 可能是 list（新版）或 dict（旧版），统一成列表
+            rows = diff if isinstance(diff, list) else list(diff.values())
+            for item in rows:
+                code = str(item.get("f12", "")).strip()
+                if not code or len(code) != 6:
+                    continue
+
+                def _num(key):
+                    v = item.get(key)
+                    try:
+                        return float(v) if v not in ("-", "", None) else 0.0
+                    except (TypeError, ValueError):
+                        return 0.0
+
+                results.append({
+                    "code": code,
+                    "name": str(item.get("f14", "")).strip(),
+                    "price": _num("f2"),
+                    "change_pct": _num("f3"),
+                    "volume": _num("f5"),
+                    "amount": _num("f6") / 10000.0,  # 元 → 万元，与腾讯接口口径一致
+                    "turnover": _num("f8"),  # 换手率(%)
+                })
+            time.sleep(0.2)  # 轻微限速，避免触发风控
+        except Exception as e:
+            print(f"  第 {page} 页获取失败: {e}")
+            break
+
+    df = pd.DataFrame(results)
+    if not df.empty:
+        df = df.drop_duplicates(subset=["code"])
+    print(f"✓ 全市场拉取完成，共 {len(df)} 只股票")
+    return df
+
+
+def prescreen_whole_market(df: pd.DataFrame, target_total: int,
+                           recently_analyzed: Set[str] = None) -> List[Dict]:
+    """对全市场行情用纯行情指标预筛出 target_total 只候选，交给 uzi-skill 深度分析。
+
+    这是「海选」第一层（不消耗昂贵的 skill 分析），用免费实时行情快速缩圈：
+    - 硬过滤：剔除 ST/退市/停牌（价格或成交额为 0）与异常股
+    - 打分：成交额（流动性）主导 + 温和上涨动量 + 换手活跃度，
+      过热（涨幅>9.5% 接近涨停）与深跌（<-6%）适度降权
+    近期已分析过的股票轻度降权（鼓励覆盖更多标的），但不硬性排除。
+    """
+    if df is None or df.empty:
+        return []
+    recently_analyzed = recently_analyzed or set()
+
+    d = df.copy()
+    # 硬过滤：有效价格 + 有成交 + 非 ST/退市
+    d = d[
+        (d["price"] > 0) &
+        (d["amount"] > 0) &
+        (~d["name"].astype(str).str.contains("ST", na=False)) &
+        (~d["name"].astype(str).str.contains("退", na=False))
+    ]
+    if d.empty:
+        return []
+
+    # 成交额分位（流动性核心指标）
+    d["amount_rank"] = d["amount"].rank(pct=True)
+    turnover = d["turnover"] if "turnover" in d.columns else pd.Series(0, index=d.index)
+
+    def _score(row) -> float:
+        score = row["amount_rank"] * 60.0  # 流动性主导
+        cp = row["change_pct"]
+        # 温和上涨最优（0~6%），过热或深跌降权
+        if 0 <= cp <= 6:
+            score += 20.0 * (1 - abs(cp - 3) / 3)
+        elif 6 < cp <= 9.5:
+            score += 6.0
+        elif cp > 9.5:
+            score += 2.0  # 接近涨停，追高风险
+        elif -6 <= cp < 0:
+            score += 8.0 * (1 + cp / 6)
+        # 换手活跃度（2%~15% 为宜）
+        tv = row.get("turnover", 0) or 0
+        if 2 <= tv <= 15:
+            score += 15.0
+        elif tv > 15:
+            score += 5.0
+        # 近期已分析轻度降权，鼓励覆盖更多标的
+        ticker = _with_market_suffix(row["code"])
+        if ticker in recently_analyzed:
+            score -= 8.0
+        return score
+
+    d["prescreen_score"] = d.apply(_score, axis=1)
+    d = d.sort_values("prescreen_score", ascending=False).head(max(1, target_total))
+
+    return [
+        _stock_row_to_dict(
+            row,
+            f"全市场海选：成交{row['amount']:.0f}万 · 涨跌{row['change_pct']:.2f}%"
+            + (f" · 换手{row['turnover']:.1f}%" if row.get('turnover') else ""),
+            "whole_market",
+        )
+        for _, row in d.iterrows()
+    ]
+
+
+def get_whole_market_candidates(target_total: int = 100) -> Dict[str, List[Dict]]:
+    """全市场海选入口：拉全市场行情 → 纯行情预筛 → 按大板块归类返回。
+
+    返回结构与 get_sector_hot_stocks 一致（{大板块: [stocks]}），使
+    auto_analyze_and_recommend 的下游流程无需区分选股来源。不在固定板块
+    映射内的股票归入「其他」大板块。
+    """
+    from app.stock_pool import get_stock_category, get_major_sector
+
+    df = get_whole_market_realtime_eastmoney()
+    if df.empty:
+        print("⚠️  全市场行情获取失败，回退到固定股票池选股")
+        return get_sector_hot_stocks(target_total=target_total)
+
+    recently_analyzed = _get_recently_analyzed_tickers(days=7)
+    candidates = prescreen_whole_market(df, target_total, recently_analyzed)
+    if not candidates:
+        print("⚠️  全市场预筛无结果，回退到固定股票池选股")
+        return get_sector_hot_stocks(target_total=target_total)
+
+    grouped: Dict[str, List[Dict]] = {}
+    for stock in candidates:
+        sub_sector = get_stock_category(stock["ticker"])
+        major = get_major_sector(sub_sector) if sub_sector != "其他" else "其他"
+        grouped.setdefault(major, []).append(stock)
+
+    print(f"✓ 全市场海选完成：{len(candidates)} 只候选，覆盖 {len(grouped)} 个大板块")
+    return grouped
+
+
 def _get_recently_analyzed_tickers(days: int = 7) -> Set[str]:
     try:
         from datetime import timedelta
